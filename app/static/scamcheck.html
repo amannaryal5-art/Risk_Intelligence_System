@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScamShield India</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=20260425-scamshield-fix" />
+</head>
+<body>
+  <div class="app-shell scamshield-shell">
+    <header class="topbar">
+      <div class="topbar-side">
+        <div class="brand-lockup">
+          <a href="/" class="brand-name link-reset">RiskIntel</a>
+          <span class="version-badge">v3.0</span>
+          <span class="brand-divider"></span>
+          <span class="shield-badge">ScamShield India</span>
+        </div>
+      </div>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/" class="nav-link">Analyst Console</a>
+        <a href="/scamcheck" class="nav-link active nav-link-scamshield">ScamShield <span class="nav-badge">FREE</span></a>
+      </nav>
+      <div class="topbar-side topbar-right">
+        <div class="status-pill">
+          <span class="status-dot ok"></span>
+          <span>No signup needed</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="scamshield-page">
+      <section class="shield-hero">
+        <div class="shield-visual-scene" aria-hidden="true">
+          <div class="shield-glow shield-glow-left"></div>
+          <div class="shield-glow shield-glow-right"></div>
+          <div class="shield-device">
+            <div class="shield-device-screen">
+              <div class="shield-screen-line shield-screen-line-lg"></div>
+              <div class="shield-screen-line"></div>
+              <div class="shield-screen-line shield-screen-line-short"></div>
+              <div class="shield-floating-card shield-card-safe">SAFE</div>
+              <div class="shield-floating-card shield-card-risk">SCAN</div>
+            </div>
+          </div>
+        </div>
+        <div class="eyebrow">Public Scam Checker</div>
+        <h1>Got a suspicious link?</h1>
+        <p>Paste any link, phone number, UPI ID, or WhatsApp message and we'll tell you if it's safe.</p>
+      </section>
+
+      <section class="shield-intake">
+        <textarea id="scamInput" class="shield-input" placeholder="Paste link, +91 number, UPI ID or any suspicious text here..."></textarea>
+        <button id="scamCheckBtn" class="btn-primary shield-submit" type="button">
+          <span class="btn-spinner" aria-hidden="true"></span>
+          <span class="btn-label">Check Now</span>
+        </button>
+        <div class="shield-support-text">Supports links • phone numbers • UPI IDs • email addresses • IP addresses</div>
+        <div id="shieldError" class="shield-error hidden"></div>
+      </section>
+
+      <section id="shieldResult" class="shield-result hidden">
+        <div class="shield-result-head">
+          <div id="shieldVerdictBadge" class="shield-verdict safe">SAFE</div>
+          <div>
+            <div class="panel-heading">ScamShield Result</div>
+            <div id="shieldSummary" class="shield-summary">Result summary</div>
+          </div>
+        </div>
+
+        <div class="shield-table-wrap">
+          <table class="shield-table">
+            <tbody id="shieldDetailsTable"></tbody>
+          </table>
+        </div>
+
+        <div class="shield-actions">
+          <button id="shareWarningBtn" class="btn-outline-accent" type="button">Share Warning</button>
+          <button id="checkAnotherBtn" class="btn-primary compact" type="button">Check Another</button>
+          <button id="toggleJsonBtn" class="btn-outline" type="button">Full Technical Report</button>
+        </div>
+
+        <pre id="shieldJson" class="shield-json hidden"></pre>
+      </section>
+
+      <section class="shield-how">
+        <article class="shield-how-card">
+          <div class="panel-heading">Paste anything</div>
+          <p>Drop in a suspicious link, UPI ID, phone number, email, IP, or forwarded message.</p>
+        </article>
+        <article class="shield-how-card">
+          <div class="panel-heading">We scan 3 databases</div>
+          <p>ScamShield checks AlienVault OTX, AbuseIPDB, and VirusTotal in one step.</p>
+        </article>
+        <article class="shield-how-card">
+          <div class="panel-heading">Get instant verdict</div>
+          <p>You get a plain-English answer first, with technical details only if you want them.</p>
+        </article>
+      </section>
+
+      <footer class="shield-footer">
+        Powered by AlienVault OTX · AbuseIPDB · VirusTotal — Free, no signup needed
+      </footer>
+    </main>
+  </div>
+
+  <script src="/static/scamcheck.js?v=20260425-scamshield-fix"></script>
+</body>
+</html>

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RiskIntel v3.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=20260425-hotfix2" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-side">
+        <div class="brand-lockup">
+          <span class="brand-name">RiskIntel</span>
+          <span class="version-badge">v3.0</span>
+          <span class="brand-divider"></span>
+          <span class="live-indicator">
+            <span class="pulse-dot green"></span>
+            <span class="live-label">LIVE</span>
+          </span>
+        </div>
+      </div>
+
+      <nav class="top-nav" aria-label="Primary">
+        <a href="#scan" class="nav-link active" data-tab="scan">Scan</a>
+        <a href="#cases" class="nav-link" data-tab="cases">Cases</a>
+        <a href="#feeds" class="nav-link" data-tab="feeds">Feeds</a>
+        <a href="/scamcheck" class="nav-link nav-link-scamshield">ScamShield <span class="nav-badge">NEW</span></a>
+      </nav>
+
+      <div class="topbar-side topbar-right">
+        <div class="latency-readout">
+          <span class="latency-icon">⚡</span>
+          <span id="latencyBadge">-- ms</span>
+        </div>
+        <span class="brand-divider"></span>
+        <div class="status-pill">
+          <span class="status-dot" id="systemDot"></span>
+          <span id="systemStatus">Connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="tab-scan" class="tab-content active">
+        <div class="scan-layout">
+          <aside class="scan-sidebar">
+            <section class="sidebar-panel">
+              <div class="sidebar-head">
+                <div class="eyebrow with-icon">
+                  <svg class="radar-icon" viewBox="0 0 48 48" aria-hidden="true">
+                    <circle cx="24" cy="24" r="18"></circle>
+                    <circle cx="24" cy="24" r="11"></circle>
+                    <circle cx="24" cy="24" r="3"></circle>
+                    <path d="M24 24 L39 14"></path>
+                  </svg>
+                  <span>Analyze</span>
+                </div>
+                <h1 class="sidebar-title">Threat intake console</h1>
+                <p class="sidebar-copy">Paste suspicious content, trace a website, or inspect a file hash from one operator panel.</p>
+              </div>
+
+              <div class="segmented-control" id="modePills">
+                <button class="mode-pill active" id="modeText" type="button" onclick="setMode('text')">Text</button>
+                <button class="mode-pill" id="modeWeb" type="button" onclick="setMode('website')">Website URL</button>
+                <button class="mode-pill" id="modeFile" type="button" onclick="setMode('file')">File Hash</button>
+              </div>
+
+              <div class="input-stack" id="textSection">
+                <div class="field-row">
+                  <label class="field-label" for="textInput">Content payload</label>
+                  <button class="ghost-inline" id="clearInputBtn" type="button">Clear</button>
+                </div>
+                <textarea id="textInput" placeholder="Paste suspicious text, email headers, links, social messages, domains, IPs, or hashes..."></textarea>
+                <div class="field-meta mono"><span id="charCount">0</span> chars buffered</div>
+                <div class="quick-detected hidden" id="quickExtract">
+                  <div class="quick-detected-head">Detected indicators</div>
+                  <div class="quick-ioc-list" id="quickIocList"></div>
+                </div>
+              </div>
+
+              <div class="input-stack hidden" id="webSection">
+                <label class="field-label" for="websiteInput">Website target</label>
+                <input id="websiteInput" type="text" class="text-input" placeholder="https://example.com" />
+                <div class="field-meta">Run fusion analysis with crawl, certificate, and domain context.</div>
+              </div>
+
+              <div class="input-stack hidden" id="fileSection">
+                <label class="field-label" for="fileHashInput">Hash target</label>
+                <input id="fileHashInput" type="text" class="text-input" placeholder="Paste an MD5, SHA1, or SHA256 hash" />
+                <div class="field-meta">Or upload a file for direct static analysis.</div>
+                <label class="file-drop" id="fileDrop" for="fileInput">
+                  <div class="file-drop-title">Drop artifact or click to upload</div>
+                  <div class="file-drop-sub">Executables, scripts, office docs, and PDFs</div>
+                  <input type="file" id="fileInput" hidden />
+                </label>
+                <div class="file-info hidden" id="fileInfo">
+                  <span id="fileName">No file selected</span>
+                  <span id="fileSize">0 B</span>
+                </div>
+              </div>
+
+              <button class="btn-primary" id="analyzeBtn" type="button" onclick="analyze()">
+                <span class="btn-spinner" aria-hidden="true"></span>
+                <span class="btn-label">Analyze</span>
+              </button>
+
+              <button class="text-link" type="button" onclick="batchMode()">Batch analyze up to 100 entries</button>
+
+              <div class="field-meta">IOC lookup is automatic now. Paste a URL, IP, domain, or hash into the main analyzer above.</div>
+            </section>
+          </aside>
+
+          <section class="results-stage">
+            <div class="empty-state" id="emptyState">
+              <div class="empty-orb"></div>
+              <div class="eyebrow">Ready Queue</div>
+              <h2>Awaiting analyst input</h2>
+              <p>Risk scoring, IOC enrichment, crawl telemetry, and recommended actions will render here after the first scan.</p>
+            </div>
+
+            <div class="results-content hidden" id="resultsContent">
+              <section class="risk-card" id="riskCard">
+                <div class="risk-card-main">
+                  <div class="score-cluster">
+                    <div class="score-kicker">Risk score</div>
+                    <div class="score-value mono" id="scoreValue">0</div>
+                    <div class="risk-badge mono" id="riskBadge">LOW</div>
+                  </div>
+                  <div class="risk-summary">
+                    <div class="risk-verdict" id="plainVerdict">Awaiting analysis.</div>
+                    <div class="confidence-row mono">
+                      <span id="confidenceValue">Confidence: --</span>
+                      <span id="scoreBasis">No scoring details yet.</span>
+                    </div>
+                    <div class="subscore-grid" id="scoreBreakdownBars">
+                      <div class="subscore-item">
+                        <div class="subscore-label"><span>Rule</span><span id="rulePct">0%</span></div>
+                        <div class="subscore-bar"><span id="ruleBar"></span></div>
+                      </div>
+                      <div class="subscore-item">
+                        <div class="subscore-label"><span>NLP</span><span id="nlpPct">0%</span></div>
+                        <div class="subscore-bar"><span id="nlpBar"></span></div>
+                      </div>
+                      <div class="subscore-item">
+                        <div class="subscore-label"><span>Intel</span><span id="intelPct">0%</span></div>
+                        <div class="subscore-bar"><span id="intelBar"></span></div>
+                      </div>
+                      <div class="subscore-item">
+                        <div class="subscore-label"><span>Fusion</span><span id="fusionPct">0%</span></div>
+                        <div class="subscore-bar"><span id="fusionBar"></span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="content-card">
+                <button class="section-toggle" id="flagsToggle" type="button">
+                  <span>Top red flags</span>
+                  <span class="mono" id="flagsChevron">-</span>
+                </button>
+                <div class="section-body" id="flagsBody">
+                  <div id="topFlags" class="flags-list"></div>
+                </div>
+              </section>
+
+              <section class="content-card">
+                <div class="tab-bar">
+                  <button class="detail-tab active" type="button" onclick="switchResultTab('overview')">Overview</button>
+                  <button class="detail-tab" type="button" onclick="switchResultTab('links')">Links &amp; Domains</button>
+                  <button class="detail-tab" type="button" onclick="switchResultTab('ioc')">IOC Intel</button>
+                  <button class="detail-tab" type="button" onclick="switchResultTab('recommendations')">Recommendations</button>
+                </div>
+
+                <div class="result-panel active" id="panel-overview">
+                  <div class="overview-grid">
+                    <section class="panel-block">
+                      <div class="panel-heading">Overview Signals</div>
+                      <div id="signals" class="stack-list"></div>
+                    </section>
+                    <section class="panel-block">
+                      <div class="panel-heading">Extracted entities</div>
+                      <div id="entityGrid" class="entity-grid"></div>
+                      <div class="panel-heading subheading">Intent profile</div>
+                      <div id="intentPanel" class="stack-list"></div>
+                    </section>
+                  </div>
+                </div>
+
+                <div class="result-panel" id="panel-links">
+                  <section class="panel-block">
+                    <div class="panel-heading">Link intelligence</div>
+                    <div id="linkSummaryRow" class="stat-grid"></div>
+                    <div id="linkTraces" class="stack-list"></div>
+                  </section>
+                  <section class="panel-block">
+                    <div class="panel-heading">Domain intelligence</div>
+                    <div id="domainDetails" class="domain-grid"></div>
+                  </section>
+                  <section class="panel-block">
+                    <div class="panel-heading">Website crawl</div>
+                    <div id="crawlStatsRow" class="stat-grid"></div>
+                    <div id="crawlPages" class="stack-list"></div>
+                  </section>
+                  <section class="panel-block">
+                    <div class="panel-heading">Certificates</div>
+                    <div id="certList" class="stack-list"></div>
+                  </section>
+                </div>
+
+                <div class="result-panel" id="panel-ioc">
+                  <section class="panel-block">
+                    <div class="panel-heading">IOC intelligence</div>
+                    <div id="iocMetaRow" class="meta-row"></div>
+                    <div id="iocResults" class="stack-list"></div>
+                  </section>
+                </div>
+
+                <div class="result-panel" id="panel-recommendations">
+                  <section class="panel-block">
+                    <div class="panel-heading">Recommended next steps</div>
+                    <div id="recommendations" class="stack-list"></div>
+                  </section>
+                </div>
+              </section>
+
+              <section class="action-row">
+                <button class="action-btn" type="button" onclick="copyReport()">⧉ Copy Summary</button>
+                <button class="action-btn" type="button" onclick="downloadReport()">⇩ Download JSON</button>
+                <button class="action-btn action-btn-primary" type="button" onclick="saveToCase()">＋ Save to Case</button>
+              </section>
+
+              <section class="content-card">
+                <div class="panel-heading">Recent scans</div>
+                <div id="recentScans" class="recent-strip"></div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-cases" class="tab-content">
+        <div class="page-shell">
+          <div class="page-header">
+            <div>
+              <div class="eyebrow">Operations</div>
+              <h2>Case Management</h2>
+            </div>
+            <div class="page-actions">
+              <button class="btn-primary compact" onclick="showCreateCase()">+ New Case</button>
+              <button class="btn-outline" onclick="loadCases()">Refresh</button>
+            </div>
+          </div>
+
+          <div class="filters-bar">
+            <select id="caseFilterStatus" onchange="loadCases()">
+              <option value="">All status</option>
+              <option value="new">New</option>
+              <option value="triaged">Triaged</option>
+              <option value="escalated">Escalated</option>
+              <option value="closed">Closed</option>
+            </select>
+            <select id="caseFilterSeverity" onchange="loadCases()">
+              <option value="">All severity</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <input id="caseSearch" type="text" placeholder="Search by title, IOC, or assignee..." oninput="loadCases()" />
+          </div>
+
+          <div id="caseList" class="case-list"></div>
+
+          <div id="caseDetail" class="case-detail hidden">
+            <div class="case-detail-top">
+              <button class="btn-outline compact" onclick="closeCaseDetail()">Back</button>
+              <div class="case-detail-title" id="caseDetailTitle">Case detail</div>
+            </div>
+            <div id="caseDetailMeta" class="case-meta-grid"></div>
+            <div class="panel-heading">Comments</div>
+            <div id="caseComments" class="comment-list"></div>
+            <div class="comment-input-row">
+              <textarea id="commentInput" rows="3" placeholder="Write a case note, escalation detail, or disposition update..."></textarea>
+              <button class="btn-primary compact" onclick="addComment()">Post</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="createCaseModal" class="modal hidden">
+          <div class="modal-box">
+            <div class="modal-header">
+              <div>
+                <div class="eyebrow">Case Intake</div>
+                <div class="modal-title">Create case</div>
+              </div>
+              <button class="modal-close" onclick="hideCreateCase()">×</button>
+            </div>
+            <input type="text" id="caseTitle" placeholder="Case title" />
+            <select id="caseSeverity">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+            <input type="text" id="caseAssignee" placeholder="Assign to" />
+            <input type="text" id="caseTags" placeholder="Comma-separated tags" />
+            <button class="btn-primary" onclick="createCase()">Create</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-feeds" class="tab-content">
+        <div class="page-shell feeds-shell">
+          <div class="page-header">
+            <div>
+              <div class="eyebrow">Intelligence Fabric</div>
+              <h2>Live Feed Status</h2>
+            </div>
+            <div class="header-meta mono" id="feedLastChecked">Last checked: --</div>
+          </div>
+
+          <div class="feeds-probe-panel">
+            <div>
+              <div class="feeds-probe-title">Threat feed orchestration</div>
+              <div class="feeds-probe-copy" id="feedLiveState">Initializing feed transport...</div>
+            </div>
+            <div class="feeds-actions">
+              <button class="btn-primary" onclick="refreshFeeds(true)">⚡ Probe all feeds</button>
+              <button class="btn-outline" onclick="refreshFeeds(false)">Refresh config</button>
+            </div>
+          </div>
+
+          <section class="feeds-storyboard">
+            <article class="feeds-story-card">
+              <div class="feeds-story-visual feeds-story-orb"></div>
+              <div class="panel-heading">1. You scan something</div>
+              <p>A URL, message, IP, or file hash is sent for enrichment.</p>
+            </article>
+            <article class="feeds-story-card">
+              <div class="feeds-story-visual feeds-story-cube"></div>
+              <div class="panel-heading">2. 3 databases respond</div>
+              <p>OTX, AbuseIPDB, and VirusTotal each return reputation signals.</p>
+            </article>
+            <article class="feeds-story-card">
+              <div class="feeds-story-visual feeds-story-ring"></div>
+              <div class="panel-heading">3. We merge the verdict</div>
+              <p>The feed cards below show the last real scan and the final threat score.</p>
+            </article>
+          </section>
+
+          <div id="feedSummaryBar" class="feed-summary-bar"></div>
+          <div id="feedGrid" class="feed-grid"></div>
+        </div>
+      </section>
+    </main>
+
+    <div id="batchModal" class="modal hidden">
+      <div class="modal-box modal-wide">
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">Bulk Intake</div>
+            <div class="modal-title">Batch analyze</div>
+          </div>
+          <button class="modal-close" type="button" onclick="closeBatch()">×</button>
+        </div>
+        <p class="modal-copy">Paste one item per line. The system will analyze up to 100 rows in a single request.</p>
+        <textarea id="batchInput" rows="10" placeholder="One IOC or suspicious text per line..."></textarea>
+        <button class="btn-primary" type="button" onclick="runBatch()">Run batch</button>
+        <div id="batchResults" class="batch-results"></div>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span>RiskIntel v3.0</span>
+      <span id="footerUser">--</span>
+      <span class="mono">/api/v1/analyze · /fusion-scan · /ioc/:type/:value</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js?v=20260425-hotfix2"></script>
+</body>
+</html>

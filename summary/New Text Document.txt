@@ -1,0 +1,37 @@
+
+This project is now a professional fraud/scam detection tool with a web dashboard.
+
+In simple terms, it does 3 main things:
+
+Text Scam Check
+You paste suspicious text (email/chat/SMS).
+It gives:
+Risk score (0–100)
+Risk level (low to critical)
+Plain verdict (easy language)
+Top red flags
+Recommended actions
+Link + Website Check
+It extracts links and checks if they look risky.
+It can crawl a full website (many pages) and estimate:
+Scam likelihood
+Malware likelihood (heuristic)
+Coverage and top risky pages
+Final site verdict (likely_safe, suspicious, likely_malicious)
+Company-Level Workflow
+API key auth with roles (admin, analyst, viewer)
+Case management (create/update cases, comments)
+Audit logs (who did what)
+Extra usability added:
+
+Quick templates
+Copy summary
+Download JSON report
+Recent scans history
+Better error handling + timeout protection
+So overall: it’s now a practical security analyst tool for triaging suspicious content and websites, with enterprise-style structure.
+
+
+
+cd "C:\git\risk_intelligence_system"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload

@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+# orjson speeds up JSON serialization by 3-5x
+orjson==3.10.18
+# httpx for future async HTTP (replaces urllib in optional upgrade path)
+httpx==0.28.1
+# watchfiles already bundled with uvicorn[standard]

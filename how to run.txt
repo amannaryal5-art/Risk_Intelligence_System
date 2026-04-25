@@ -1,0 +1,14 @@
+# Step 1 — go to project root (not app subfolder)
+cd C:\git\risk_intelligence_system
+
+# Step 2 — activate the venv
+.\.venv\Scripts\Activate.ps1
+
+# Step 3 — if you get a permissions error on activation, run this first:
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Step 4 — install dependencies
+pip install -r requirements.txt
+
+# Step 5 — start the server
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
