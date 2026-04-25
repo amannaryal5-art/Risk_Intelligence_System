@@ -1147,13 +1147,26 @@ class RiskEngine:
         coverage = int(round((len(visited) / max(len(discovered_internal_urls), 1)) * 100))
         scam_likelihood = int(min(100, round((avg_score * 0.55) + (len(high_pages) * 6) + (len(medium_pages) * 2) + (highest * 0.12))))
         malware_likelihood = int(min(100, round((avg_malware * 0.65) + (highest_malware * 0.2) + (len(malware_likely) * 15) + (len(malware_suspicious) * 4))))
-        final_site_verdict = ("likely_malicious" if scam_likelihood >= 70 or malware_likelihood >= 65 or overall == "critical"
-                              else ("suspicious" if scam_likelihood >= 45 or malware_likelihood >= 40 or overall in {"high", "medium"} else "likely_safe"))
+        crawl_failed = bool(page_reports) and not ok_pages
+        crawl_partial = bool(failed_pages) and coverage < 60
+        if crawl_failed:
+            overall = "medium"
+            scam_likelihood = max(scam_likelihood, 35)
+            malware_likelihood = max(malware_likelihood, 20)
+            final_site_verdict = "suspicious"
+        elif crawl_partial and overall == "low":
+            overall = "medium"
+            scam_likelihood = max(scam_likelihood, 25)
+            final_site_verdict = "suspicious"
+        else:
+            final_site_verdict = ("likely_malicious" if scam_likelihood >= 70 or malware_likelihood >= 65 or overall == "critical"
+                                  else ("suspicious" if scam_likelihood >= 45 or malware_likelihood >= 40 or overall in {"high", "medium"} else "likely_safe"))
 
         recs = []
         if high_pages: recs.append("Block/monitor high-risk pages and enforce user click protection.")
         if malware_likely: recs.append("Malware behavior detected; isolate domain and sandbox artifacts.")
         if malware_suspicious and not malware_likely: recs.append("Suspicious script patterns; perform dynamic analysis before allowing access.")
+        if crawl_failed: recs.append("Crawler could not retrieve any pages; treat the scan as incomplete and verify network or host controls.")
         if failed_pages: recs.append("Review failed crawl targets; hidden paths may contain suspicious content.")
         if len(discovered_hosts) > 8: recs.append("High host diversity; investigate redirect/chaining behavior.")
         if coverage < 60: recs.append("Coverage limited; increase max_pages/max_depth for full trace.")
@@ -1188,6 +1201,53 @@ class RiskEngine:
             "pages": page_reports,
             "recommendations": recs[:6],
         }
+
+
+_riskintel_original_trace_website = RiskEngine.trace_website
+
+
+def _patched_trace_website(
+    self: RiskEngine,
+    seed_url: str,
+    max_pages: int = 80,
+    max_depth: int = 3,
+    include_external: bool = False,
+    exhaustive: bool = True,
+) -> Dict[str, object]:
+    result = _riskintel_original_trace_website(
+        self,
+        seed_url,
+        max_pages=max_pages,
+        max_depth=max_depth,
+        include_external=include_external,
+        exhaustive=exhaustive,
+    )
+    if not isinstance(result, dict):
+        return result
+
+    pages_ok = int(result.get("pages_ok") or 0)
+    pages_failed = int(result.get("pages_failed") or 0)
+    coverage = int(result.get("coverage_percent") or 0)
+    recommendations = list(result.get("recommendations") or [])
+
+    if pages_failed and pages_ok == 0:
+        result["risk_level"] = "medium"
+        result["site_verdict"] = "suspicious"
+        result["scam_likelihood"] = max(int(result.get("scam_likelihood") or 0), 35)
+        result["malware_likelihood"] = max(int(result.get("malware_likelihood") or 0), 20)
+        message = "Crawler could not retrieve any pages; treat the scan as incomplete and verify network or host controls."
+        if message not in recommendations:
+            recommendations.insert(0, message)
+    elif pages_failed and coverage < 60 and str(result.get("risk_level") or "low") == "low":
+        result["risk_level"] = "medium"
+        result["site_verdict"] = "suspicious"
+        result["scam_likelihood"] = max(int(result.get("scam_likelihood") or 0), 25)
+
+    result["recommendations"] = recommendations[:6]
+    return result
+
+
+RiskEngine.trace_website = _patched_trace_website
 
 
 FRAUD_TEMPLATES: Dict[str, List[str]] = {
@@ -2479,13 +2539,26 @@ class RiskEngine:
         coverage = int(round((len(visited) / max(len(discovered_internal_urls), 1)) * 100))
         scam_likelihood = int(min(100, round((avg_score * 0.55) + (len(high_pages) * 6) + (len(medium_pages) * 2) + (highest * 0.12))))
         malware_likelihood = int(min(100, round((avg_malware * 0.65) + (highest_malware * 0.2) + (len(malware_likely) * 15) + (len(malware_suspicious) * 4))))
-        final_site_verdict = ("likely_malicious" if scam_likelihood >= 70 or malware_likelihood >= 65 or overall == "critical"
-                              else ("suspicious" if scam_likelihood >= 45 or malware_likelihood >= 40 or overall in {"high", "medium"} else "likely_safe"))
+        crawl_failed = bool(page_reports) and not ok_pages
+        crawl_partial = bool(failed_pages) and coverage < 60
+        if crawl_failed:
+            overall = "medium"
+            scam_likelihood = max(scam_likelihood, 35)
+            malware_likelihood = max(malware_likelihood, 20)
+            final_site_verdict = "suspicious"
+        elif crawl_partial and overall == "low":
+            overall = "medium"
+            scam_likelihood = max(scam_likelihood, 25)
+            final_site_verdict = "suspicious"
+        else:
+            final_site_verdict = ("likely_malicious" if scam_likelihood >= 70 or malware_likelihood >= 65 or overall == "critical"
+                                  else ("suspicious" if scam_likelihood >= 45 or malware_likelihood >= 40 or overall in {"high", "medium"} else "likely_safe"))
 
         recs = []
         if high_pages: recs.append("Block/monitor high-risk pages and enforce user click protection.")
         if malware_likely: recs.append("Malware behavior detected; isolate domain and sandbox artifacts.")
         if malware_suspicious and not malware_likely: recs.append("Suspicious script patterns; perform dynamic analysis before allowing access.")
+        if crawl_failed: recs.append("Crawler could not retrieve any pages; treat the scan as incomplete and verify network or host controls.")
         if failed_pages: recs.append("Review failed crawl targets; hidden paths may contain suspicious content.")
         if len(discovered_hosts) > 8: recs.append("High host diversity; investigate redirect/chaining behavior.")
         if coverage < 60: recs.append("Coverage limited; increase max_pages/max_depth for full trace.")
@@ -6067,3 +6140,49 @@ class RiskEngine:
             "pages": page_reports,
             "recommendations": recs[:6],
         }
+        
+_riskintel_original_trace_website_final = RiskEngine.trace_website
+
+
+def _patched_trace_website_final(
+    self: RiskEngine,
+    seed_url: str,
+    max_pages: int = 80,
+    max_depth: int = 3,
+    include_external: bool = False,
+    exhaustive: bool = True,
+) -> Dict[str, object]:
+    result = _riskintel_original_trace_website_final(
+        self,
+        seed_url,
+        max_pages=max_pages,
+        max_depth=max_depth,
+        include_external=include_external,
+        exhaustive=exhaustive,
+    )
+    if not isinstance(result, dict):
+        return result
+
+    pages_ok = int(result.get("pages_ok") or 0)
+    pages_failed = int(result.get("pages_failed") or 0)
+    coverage = int(result.get("coverage_percent") or 0)
+    recommendations = list(result.get("recommendations") or [])
+
+    if pages_failed and pages_ok == 0:
+        result["risk_level"] = "medium"
+        result["site_verdict"] = "suspicious"
+        result["scam_likelihood"] = max(int(result.get("scam_likelihood") or 0), 35)
+        result["malware_likelihood"] = max(int(result.get("malware_likelihood") or 0), 20)
+        message = "Crawler could not retrieve any pages; treat the scan as incomplete and verify network or host controls."
+        if message not in recommendations:
+            recommendations.insert(0, message)
+    elif pages_failed and coverage < 60 and str(result.get("risk_level") or "low") == "low":
+        result["risk_level"] = "medium"
+        result["site_verdict"] = "suspicious"
+        result["scam_likelihood"] = max(int(result.get("scam_likelihood") or 0), 25)
+
+    result["recommendations"] = recommendations[:6]
+    return result
+
+
+RiskEngine.trace_website = _patched_trace_website_final

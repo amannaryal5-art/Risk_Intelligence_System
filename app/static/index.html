@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=20260425-hotfix2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260425-hotfix3" />
 </head>
 <body>
   <div class="app-shell">
@@ -335,24 +335,9 @@
             </div>
           </div>
 
-          <section class="feeds-storyboard">
-            <article class="feeds-story-card">
-              <div class="feeds-story-visual feeds-story-orb"></div>
-              <div class="panel-heading">1. You scan something</div>
-              <p>A URL, message, IP, or file hash is sent for enrichment.</p>
-            </article>
-            <article class="feeds-story-card">
-              <div class="feeds-story-visual feeds-story-cube"></div>
-              <div class="panel-heading">2. 3 databases respond</div>
-              <p>OTX, AbuseIPDB, and VirusTotal each return reputation signals.</p>
-            </article>
-            <article class="feeds-story-card">
-              <div class="feeds-story-visual feeds-story-ring"></div>
-              <div class="panel-heading">3. We merge the verdict</div>
-              <p>The feed cards below show the last real scan and the final threat score.</p>
-            </article>
-          </section>
-
+          <div class="feeds-inline-note">
+            The cards below show live provider availability and the most recent scan snapshot captured from this browser session.
+          </div>
           <div id="feedSummaryBar" class="feed-summary-bar"></div>
           <div id="feedGrid" class="feed-grid"></div>
         </div>
@@ -382,6 +367,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js?v=20260425-hotfix2"></script>
+  <script src="/static/app.js?v=20260425-hotfix3"></script>
 </body>
 </html>

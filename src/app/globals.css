@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #050a0f;
+  --color-surface: #0a1520;
+  --color-panel: #0d1b2a;
+  --color-accent: #00d4ff;
+  --color-success: #00ff88;
+  --color-warning: #ffaa00;
+  --color-danger: #ff3366;
+  --color-muted: #4a6d8c;
+  --color-line: rgba(0, 212, 255, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(0, 212, 255, 0.06), transparent 30%),
+    linear-gradient(180deg, #04080d 0%, #050a0f 100%);
+  color: white;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.9) 0.6px, transparent 0.6px),
+    linear-gradient(180deg, transparent, rgba(0, 212, 255, 0.04));
+  background-size: 18px 18px, 100% 100%;
+  mix-blend-mode: screen;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
