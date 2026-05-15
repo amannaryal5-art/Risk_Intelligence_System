@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block login_content %}
+<main class="login-shell">
+  <section class="login-panel">
+    <div class="eyebrow">RiskIntel v3.0</div>
+    <h1>Threat Command Access</h1>
+    <p>Authenticate to enter the autonomous watch floor.</p>
+    <form id="loginForm" class="login-form">
+      <label>
+        <span>Username</span>
+        <input id="username" class="shell-input" name="username" type="text" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Password</span>
+        <input id="password" class="shell-input" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <label>
+        <span>MFA TOTP</span>
+        <input id="totp" class="shell-input mono" name="totp" type="text" inputmode="numeric" maxlength="8" required>
+      </label>
+      <button class="button login-button" type="submit">Enter Watch Floor</button>
+    </form>
+    <div id="loginStatus" class="login-status">Session validation is performed against live auth endpoints only.</div>
+  </section>
+</main>
+{% endblock %}

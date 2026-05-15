@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} | RiskIntel v3.0</title>
+  <link rel="icon" href="/static/images/logo-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body data-view="{{ page_view }}" data-ws-path="{{ ws_path }}" data-ioc-stream-path="{{ ioc_stream_path }}">
+  {% if page_view == "login" %}
+    {% block login_content %}{% endblock %}
+  {% else %}
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-cluster">
+          <a href="/" class="brand-link" aria-label="RiskIntel home">
+            <img src="/static/images/logo-mark.svg" alt="" class="brand-mark">
+            <div>
+              <div class="brand-title">RiskIntel</div>
+              <div class="brand-meta">
+                <span class="version-badge">{{ app_version }}</span>
+                <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+                <span class="new-badge">ScamShield <em>NEW</em></span>
+              </div>
+            </div>
+          </a>
+        </div>
+        <nav class="topnav" aria-label="Primary">
+          <a href="/" data-nav="command">Command</a>
+          <a href="/cases" data-nav="cases">Cases</a>
+          <a href="/feeds" data-nav="feeds">Feeds</a>
+          <a href="/campaigns" data-nav="campaigns">Campaigns</a>
+          <a href="/actors" data-nav="actors">Actors</a>
+          <a href="/assets" data-nav="assets">Assets</a>
+          <a href="/reports" data-nav="reports">Reports</a>
+        </nav>
+        <div class="topbar-actions">
+          <button id="notificationsButton" class="icon-button" aria-label="Notifications">
+            <span>Alerts</span>
+            <strong id="notificationCount" class="pill critical">0</strong>
+          </button>
+          <div id="connectionBadge" class="status-chip live" aria-live="polite">Live</div>
+          <div class="latency-cluster">
+            <canvas id="latencySparkline" width="72" height="24" aria-hidden="true"></canvas>
+            <span id="latencyValue" class="mono">--ms</span>
+          </div>
+          <div class="user-menu">
+            <button id="userMenuButton" class="icon-button" aria-haspopup="menu" aria-expanded="false">
+              <span class="avatar">RI</span>
+              <span id="currentUserRole">Viewer</span>
+            </button>
+            <div id="userMenu" class="dropdown" hidden>
+              <a href="/workbench">Workbench</a>
+              <a href="/settings" data-role="admin">Settings</a>
+              <button id="logoutButton" type="button">Logout</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside id="intelSidebar" class="sidebar">
+          <div class="sidebar-header">
+            <div>
+              <div class="eyebrow">Live Intelligence Stream</div>
+              <h2>Autonomous IOC Flow</h2>
+            </div>
+            <div class="sidebar-controls">
+              <button id="streamToggle" class="icon-button compact" type="button" aria-label="Pause stream">Pause</button>
+              <button id="streamFilterToggle" class="icon-button compact" type="button" aria-label="Toggle filters">Filters</button>
+            </div>
+          </div>
+          <div id="streamFilters" class="sidebar-filters" hidden>
+            <div class="filter-group">
+              <span>Type</span>
+              <label><input type="checkbox" value="ip" checked>IP</label>
+              <label><input type="checkbox" value="domain" checked>Domain</label>
+              <label><input type="checkbox" value="url" checked>URL</label>
+              <label><input type="checkbox" value="hash" checked>Hash</label>
+            </div>
+            <div class="filter-group">
+              <label for="streamScoreMin">Min score</label>
+              <input id="streamScoreMin" type="range" min="0" max="100" value="60">
+            </div>
+          </div>
+          <div id="iocStream" class="stream-list" aria-live="polite"></div>
+          <div class="stream-footer">
+            <span id="streamHealth">0 IOCs/hour | 0 backlog</span>
+          </div>
+        </aside>
+
+        <main id="mainContent" class="content">
+          {% block content %}{% endblock %}
+        </main>
+      </div>
+
+      <footer class="footerbar">
+        <div id="systemStatusBar" class="footer-left">
+          <span>Database <strong class="healthy">●</strong></span>
+          <span>Redis <strong class="healthy">●</strong></span>
+          <span>Feeds <strong class="healthy">●</strong></span>
+          <span>Workers <strong class="healthy">●</strong></span>
+        </div>
+        <div id="activityTicker" class="footer-ticker" aria-live="polite">Awaiting live activity...</div>
+        <div class="footer-right">
+          <button class="copy-endpoint" data-copy="/api/v1/analyze" type="button">/api/v1/analyze</button>
+          <button class="copy-endpoint" data-copy="/api/v1/fusion-scan" type="button">/fusion-scan</button>
+          <button class="copy-endpoint" data-copy="/api/v1/ioc/:type/:value" type="button">/ioc/:type/:value</button>
+        </div>
+      </footer>
+    </div>
+
+    <div id="modalRoot"></div>
+    <div id="toastRoot" aria-live="assertive" aria-atomic="true"></div>
+    <div id="offlineOverlay" class="offline-overlay" hidden>
+      <div class="offline-card">
+        <div class="eyebrow">Connection Lost</div>
+        <h2>Retrying live control plane</h2>
+        <p id="offlineMessage">Reconnecting to backend in 5s.</p>
+        <div id="offlineQueueCount" class="mono">Queued analyst actions: 0</div>
+      </div>
+    </div>
+    <div id="screenEdgeAlert" class="screen-edge-alert" aria-hidden="true"></div>
+  {% endif %}
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

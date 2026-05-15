@@ -1,128 +1,62 @@
-# Risk Intelligence System
+# RiskIntel v3.0 UI
 
-Professional Python-based rule + NLP fraud detection platform with a futuristic dark UI.
+RiskIntel v3.0 is a FastAPI + Jinja2 + vanilla JavaScript command-center UI for autonomous threat intelligence operations. It ships without a Node.js build step and mounts the existing backend in-process so all UI calls stay on relative `/api/v1/...` routes.
 
-## Features
-- Hybrid detection engine: deterministic rules + NLP-style token/bigram similarity + behavioral text signals
-- Advanced link intelligence: traces normal and obfuscated links (`hxxp`, `[.]`), inspects domain/IP/port/query-risk markers
-- Plain-language verdict and top red-flag explanations
-- Confidence scoring for analyst trust level
-- Automated response playbook recommendations with deterministic threat fingerprinting
-- Full website crawler and tracer: scans pages recursively, scores each page, and highlights top risky paths
-- One-click fusion scan endpoint that combines message and website telemetry into unified module posture
-- Deep website verdicting: scam likelihood + malware likelihood + coverage score + likely_malicious/suspicious/likely_safe verdict
-- Risk scoring model from 0-100 with levels: `low`, `medium`, `high`, `critical`
-- Explainable detections via weighted signal evidence
-- Analyst features: copy summary, report export, file analysis, and recent scan history
-- REST API endpoints for single and batch analysis
-- Company-ready backbone: API-key auth, RBAC, persistent case management, and audit logging
-- Futuristic, SOC-style dark interface for analysts
+## Stack
 
-## Tech Stack
-- FastAPI
-- Vanilla HTML/CSS/JS frontend
+- FastAPI serves both the UI shell and the existing API backend
+- Jinja2 templates for route-level pages
+- Vanilla ES modules for the runtime
+- WebSocket + EventSource live transport
+- Precompiled CSS utility/component layer aligned to the RiskIntel design tokens
 
-## Quick Start
+## Launch
+
 ```bash
-cd "C:\git\risk_intellignce_system"
+cd C:\git\Risk_Intelligence_System
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
-python -m uvicorn app.main:app --reload
+python app.py
 ```
 
-Open: http://127.0.0.1:8000
+Open `http://localhost:8000`
 
-If you are inside the `app` folder, use this instead:
-```bash
-python -m uvicorn main:app --reload
-```
+## Architecture
 
-## API
-- `GET /api/v1/health`
-- `GET /api/v1/auth/whoami`
-- `POST /api/v1/analyze`
-```json
-{ "text": "Urgent! buy gift cards and send codes now" }
-```
-- `POST /api/v1/analyze/batch`
-```json
-{ "texts": ["text 1", "text 2"] }
-```
+- `app.py`: UI entrypoint, security headers, Jinja routes, static mount, backend mount
+- `templates/`: shared shell plus route templates for command, cases, feeds, campaigns, actors, assets, reports, workbench, settings, login
+- `static/js/app.js`: bootstraps auth, routing, command palette, shortcuts, live stream, top shell behavior
+- `static/js/liveBus.js`: pure WebSocket + SSE manager with heartbeat, backoff, queueing
+- `static/js/*.js`: per-view controllers that fetch live endpoints only and degrade gracefully when an endpoint is absent
+- `static/css/app.css`: production-ready command center styling, tokens, responsive behavior, reduced-motion support
 
-- `POST /api/v1/trace-website`
-```json
-{
-  "url": "https://example.com",
-  "max_pages": 120,
-  "max_depth": 4,
-  "include_external": false,
-  "exhaustive": true
-}
-```
+## Endpoint Strategy
 
-- `POST /api/v1/fusion-scan`
-```json
-{
-  "text": "Optional suspicious message to score",
-  "website_url": "https://example.com",
-  "max_pages": 80,
-  "max_depth": 3,
-  "include_external": false,
-  "exhaustive": true
-}
-```
+The UI calls the live backend routes directly and does not ship any mock data. If an expected endpoint is not yet implemented by the backend, the page shows a structured degraded-state panel instead of inventing placeholder results.
 
-- `POST /api/v1/threat-intel`
-```json
-{
-  "text": "Optional text containing URLs/IPs/domains/hashes",
-  "urls": ["https://example.com/login"],
-  "domains": ["example.com"],
-  "ips": ["8.8.8.8"],
-  "hashes": ["44d88612fea8a8f36de82e1278abb02f"],
-  "live_feeds": true
-}
-```
+Examples:
 
-- `POST /api/v1/malware/analyze-file`
-```json
-{
-  "filename": "invoice.pdf",
-  "content_base64": "<base64-bytes>"
-}
-```
+- Command Center: `/api/v1/dashboard/stats`, `/api/v1/dashboard/activity`, `/api/v1/scans/active`
+- Cases: `/api/v1/cases`, `/api/v1/cases/{id}`, fallback support for generic `PATCH /api/v1/cases/{id}`
+- Feeds: `/api/v1/feeds/status`, `/api/v1/feeds/status/live`, `/api/v1/feeds/quota`, `/api/v1/feeds/{id}/probe`
+- Intelligence: `/api/v1/ioc/{type}/{value}`, `/api/v1/ioc/stream`, `/ws/live`
 
-Optional live feed keys:
-- `RISKINTEL_OTX_API_KEY`
-- `RISKINTEL_ABUSEIPDB_API_KEY`
-- `RISKINTEL_VT_API_KEY`
+## Security
 
-### Enterprise Endpoints
-- `POST /api/v1/cases`
-- `POST /api/v1/cases/from-analysis`
-- `GET /api/v1/cases`
-- `GET /api/v1/cases/{case_id}`
-- `PATCH /api/v1/cases/{case_id}`
-- `POST /api/v1/cases/{case_id}/comments`
-- `GET /api/v1/audit` (admin only)
+- CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`
+- No `localStorage` token persistence
+- Relative API calls for reverse-proxy compatibility
+- Escaped user-controlled output before rendering
 
-### Auth / RBAC
-- Header: `X-API-Key: <key>`
-- Authentication is enforced by default.
-- Configure keys using:
-  - `RISKINTEL_API_KEYS=key1:admin:alice,key2:analyst:bob,key3:viewer:eve`
-- Optional backend default key (for trusted internal UI calls without header):
-  - `RISKINTEL_DEFAULT_API_KEY=key2`
-- Optional live feed default:
-  - `RISKINTEL_USE_LIVE_FEEDS=true`
-- Optional:
-  - set `RISKINTEL_ENFORCE_AUTH=false` only for isolated local testing
+## Browser Compatibility
+
+- Chrome / Edge current
+- Firefox current
+- Safari 17+
 
 ## Notes
-For production hardening, add:
-- Model calibration with labeled domain data
-- AuthN/AuthZ and audit logging
-- Prompt/attack-resilient preprocessing pipeline
-- Persistent storage and workflow queues
+
+- The current backend in this repository exposes only part of the target RiskIntel v3.0 API surface. The UI is already wired to the full contract and will automatically light up additional screens as those endpoints come online.
+- The legacy Next.js code remains in the repository, but the new launch path is `python app.py`.

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="view-shell">
+  <div class="view-header">
+    <div>
+      <div class="eyebrow">Provider Telemetry And Quota Control</div>
+      <h1>Feed Orchestration</h1>
+    </div>
+    <div class="view-actions">
+      <button id="probeAllFeeds" class="button" type="button">Probe All Feeds</button>
+    </div>
+  </div>
+  <section class="panel">
+    <div class="panel-header"><h2>Feed Topology</h2></div>
+    <div id="feedTopology" class="topology-stage"></div>
+  </section>
+  <div class="dashboard-grid two-up">
+    <section class="panel">
+      <div class="panel-header"><h2>Provider Grid</h2></div>
+      <div id="feedProviderGrid" class="card-grid"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>Quota Dashboard</h2></div>
+      <div id="quotaDashboard" class="quota-stack"></div>
+    </section>
+  </div>
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Feed Logs</h2>
+      <button id="downloadFeedLogs" class="button ghost compact" type="button">Download Logs</button>
+    </div>
+    <pre id="feedLogs" class="log-viewer"></pre>
+  </section>
+</section>
+{% endblock %}

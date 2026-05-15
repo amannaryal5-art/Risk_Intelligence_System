@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="view-shell">
+  <div class="view-header">
+    <div>
+      <div class="eyebrow">TTP Attribution Layer</div>
+      <h1>Threat Actor Intelligence</h1>
+    </div>
+  </div>
+  <section class="panel">
+    <div class="panel-header"><h2>MITRE ATT&amp;CK Activity Matrix</h2></div>
+    <div id="attackMatrix" class="matrix-grid"></div>
+  </section>
+  <section class="panel">
+    <div class="panel-header"><h2>Actor Profiles</h2></div>
+    <div id="actorCards" class="card-grid"></div>
+  </section>
+</section>
+{% endblock %}
