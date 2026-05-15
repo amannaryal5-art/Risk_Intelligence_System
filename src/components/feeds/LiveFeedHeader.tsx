@@ -7,12 +7,14 @@ import { ProbeButton } from "@/components/feeds/ProbeButton";
 export function LiveFeedHeader({
   formattedTime,
   isProbing,
+  isConnected,
   refreshSpin,
   onProbe,
   onRefresh,
 }: {
   formattedTime: string;
   isProbing: boolean;
+  isConnected: boolean;
   refreshSpin: number;
   onProbe: () => void;
   onRefresh: () => void;
@@ -57,7 +59,7 @@ export function LiveFeedHeader({
           Live Feed Status
         </div>
         <div className="font-data text-sm text-muted">
-          Live websocket transport connected
+          {isConnected ? "Live websocket transport connected" : "Polling fallback active"}
         </div>
         <div className="h-px overflow-hidden rounded-full bg-white/5">
           <div className="h-full w-full animate-dash bg-[linear-gradient(90deg,transparent,rgba(0,212,255,0.8),transparent)] bg-[length:120px_1px]" />

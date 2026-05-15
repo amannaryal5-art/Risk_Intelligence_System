@@ -8,9 +8,16 @@ import { cn } from "@/lib/utils";
 import type { FeedProvider } from "@/types/feeds";
 
 function latencyClass(latencyMs: number) {
+  if (latencyMs <= 0) return "text-muted border-white/10 bg-white/[0.03]";
   if (latencyMs < 500) return "text-success border-success/25 bg-success/10";
   if (latencyMs <= 1500) return "text-warning border-warning/25 bg-warning/10";
   return "text-danger border-danger/25 bg-danger/10";
+}
+
+function statusTone(status: FeedProvider["status"]) {
+  if (status === "READY") return "border-success/25 bg-success/10 text-success";
+  if (status === "DEGRADED") return "border-warning/25 bg-warning/10 text-warning";
+  return "border-danger/25 bg-danger/10 text-danger";
 }
 
 function verdictTone(verdict: FeedProvider["latestScan"]["verdict"]) {
@@ -31,7 +38,7 @@ export function FeedProviderCard({
   const reducedMotion = useReducedMotion();
   const statusReady = provider.status === "READY";
   const terminalLines = [
-    `> Querying ${provider.latestScan.url}`,
+    `> Snapshot ${provider.latestScan.url}`,
     ...provider.latestScan.fields.map((field) => `> ${field.label}: ${field.value}`),
     `> Threat score: ${provider.latestScan.threatScore}`,
   ];
@@ -80,9 +87,9 @@ export function FeedProviderCard({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-success/25 bg-success/10 px-3 py-1 font-data text-[11px] uppercase tracking-[0.18em] text-success">
+              <div className={cn("inline-flex items-center gap-2 rounded-full border px-3 py-1 font-data text-[11px] uppercase tracking-[0.18em]", statusTone(provider.status))}>
                 <span className="relative flex h-2.5 w-2.5 items-center justify-center">
-                  <span className="h-2 w-2 rounded-full bg-success" />
+                  <span className={cn("h-2 w-2 rounded-full", provider.status === "READY" ? "bg-success" : provider.status === "DEGRADED" ? "bg-warning" : "bg-danger")} />
                   {statusReady && !reducedMotion ? (
                     <motion.span
                       className="absolute inset-0 rounded-full border border-success/60"
@@ -118,7 +125,7 @@ export function FeedProviderCard({
         <div className="space-y-3">
           <div className="flex items-center justify-between font-data text-[11px] uppercase tracking-[0.22em] text-muted">
             <span>Latest Scan</span>
-            <span className="text-accent">▶▶▶ Live</span>
+            <span className="text-accent">{provider.latestScan.url ? "Live" : "Probe Snapshot"}</span>
           </div>
           <TerminalLog lines={terminalLines} verdict={provider.latestScan.verdict} />
         </div>

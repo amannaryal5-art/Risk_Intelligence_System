@@ -1,3 +1,34 @@
+export interface FeedProbeResult {
+  name: string;
+  display_name: string;
+  configured: boolean;
+  reachable: boolean;
+  auth_valid: boolean;
+  latency_ms: number | null;
+  http_status: number | null;
+  error: string | null;
+  last_checked: string;
+}
+
+export interface FeedSummary {
+  configured: number;
+  reachable: number;
+  auth_valid: number;
+  total: number;
+}
+
+export interface FeedStatusResponse {
+  timestamp: string;
+  feeds: FeedProbeResult[];
+  summary: FeedSummary;
+}
+
+export interface SystemHealth {
+  cfg: { current: number; total: number };
+  net: { current: number; total: number };
+  auth: { current: number; total: number };
+}
+
 export interface FeedProvider {
   id: string;
   name: string;
@@ -15,10 +46,4 @@ export interface FeedProvider {
     verdict: "CLEAN" | "SUSPICIOUS" | "MALICIOUS";
   };
   icon: string;
-}
-
-export interface SystemHealth {
-  cfg: { current: number; total: number };
-  net: { current: number; total: number };
-  auth: { current: number; total: number };
 }
