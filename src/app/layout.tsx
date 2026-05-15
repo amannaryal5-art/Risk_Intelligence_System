@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono, Rajdhani } from "next/font/google";
 
 import "@/app/globals.css";
+import { TopBar } from "@/components/shared/TopBar";
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -27,6 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${jetbrainsMono.variable} ${rajdhani.variable}`}>
+        <TopBar />
         {children}
       </body>
     </html>

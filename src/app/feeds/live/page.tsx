@@ -48,10 +48,20 @@ function latestVerdict(feed: FeedProbeResult): FeedProvider["latestScan"]["verdi
   return "MALICIOUS";
 }
 
+function relativeTime(timestamp: string | null) {
+  if (!timestamp) return "Never";
+  const diffSeconds = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 1000));
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  const minutes = Math.round(diffSeconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
 export default function LiveFeedsPage() {
   const apiKey =
     typeof window !== "undefined" ? window.localStorage.getItem("riskintel_api_key")?.trim() ?? "" : "";
-  const { feedData, formattedTime, isConnected, isProbing, runProbe } = useLiveFeedPolling(apiKey);
+  const { feedData, formattedTime, isConnected, isProbing, runProbe, lastUpdated } = useLiveFeedPolling(apiKey);
   const [toast, setToast] = useState<string | null>(null);
   const [refreshSpin, setRefreshSpin] = useState(0);
 
@@ -84,7 +94,7 @@ export default function LiveFeedsPage() {
         capabilities: meta.capabilities,
         icon: meta.icon,
         latestScan: {
-          url: feed.last_checked,
+          url: relativeTime(feed.last_checked),
           fields: [
             { label: "Configured", value: feed.configured ? "Yes" : "No" },
             { label: "Reachable", value: feed.reachable ? "Yes" : "No" },
@@ -106,10 +116,10 @@ export default function LiveFeedsPage() {
   };
 
   return (
-    <main className="min-h-screen bg-bg px-4 py-6 text-white lg:px-8">
+    <main className="min-h-screen bg-bg px-4 pb-8 pt-24 text-white lg:px-8">
       <div className="mx-auto max-w-[1600px] space-y-6">
         <LiveFeedHeader
-          formattedTime={formattedTime}
+          formattedTime={`${formattedTime} · ${relativeTime(lastUpdated)}`}
           isConnected={isConnected}
           isProbing={isProbing}
           refreshSpin={refreshSpin}

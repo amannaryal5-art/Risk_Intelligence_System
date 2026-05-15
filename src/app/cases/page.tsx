@@ -20,7 +20,9 @@ export default function CasesPage() {
     setApiKey(window.localStorage.getItem("riskintel_api_key")?.trim() ?? "");
   }, []);
 
-  const filtered = cases.filter((item) => (!status || item.status === status) && (!severity || item.severity === severity));
+  const filtered = cases.filter(
+    (item) => (!status || item.status === status) && (!severity || item.severity === severity),
+  );
 
   const createCase = async () => {
     await api.cases.create(
@@ -37,8 +39,8 @@ export default function CasesPage() {
   };
 
   return (
-    <main className="min-h-screen bg-bg px-4 py-6 text-white lg:px-8">
-      <div className="mx-auto max-w-6xl space-y-6">
+    <main className="min-h-screen bg-bg px-4 pb-8 pt-24 text-white lg:px-8">
+      <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="font-data text-xs uppercase tracking-[0.28em] text-accent">Case Management</div>
@@ -49,8 +51,18 @@ export default function CasesPage() {
           <Button onClick={createCase}>Create Manual Case</Button>
         </div>
 
-        <section className="rounded-[2rem] border border-white/8 bg-black/20 p-5">
-          <div className="grid gap-4 lg:grid-cols-3">
+        <section className="rounded-2xl border border-white/8 bg-surface/80 p-5">
+          <div className="grid gap-4 lg:grid-cols-4">
+            <input
+              value={apiKey}
+              onChange={(event) => {
+                const next = event.target.value;
+                setApiKey(next);
+                window.localStorage.setItem("riskintel_api_key", next);
+              }}
+              placeholder="X-API-Key"
+              className="rounded-xl border border-white/10 bg-[#060b12] px-3 py-3 font-data text-sm text-slate-100 outline-none transition-all duration-150 focus:border-accent/40"
+            />
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value)}
@@ -80,7 +92,11 @@ export default function CasesPage() {
         </section>
 
         {isLoading ? <div className="font-data text-sm text-muted">Loading cases...</div> : null}
-        {error ? <div className="font-data text-sm text-danger">{error}</div> : null}
+        {error ? (
+          <div className="rounded-xl border border-danger/25 bg-danger/5 px-4 py-3">
+            <div className="font-data text-xs text-danger">{error}</div>
+          </div>
+        ) : null}
 
         <section className="grid gap-4">
           {filtered.map((item) => (

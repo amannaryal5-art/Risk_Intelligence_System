@@ -37,6 +37,7 @@ export function FeedProviderCard({
 }) {
   const reducedMotion = useReducedMotion();
   const statusReady = provider.status === "READY";
+  const offline = provider.status === "OFFLINE";
   const terminalLines = [
     `> Snapshot ${provider.latestScan.url}`,
     ...provider.latestScan.fields.map((field) => `> ${field.label}: ${field.value}`),
@@ -49,12 +50,12 @@ export function FeedProviderCard({
       animate={reducedMotion ? undefined : { y: 0, opacity: 1 }}
       transition={{ delay: index * 0.1, duration: 0.45, ease: "easeOut" }}
       whileHover={reducedMotion ? undefined : { scale: 1.01 }}
-      className="group relative overflow-hidden rounded-2xl border border-accent/15 bg-[linear-gradient(180deg,rgba(10,21,32,0.96),rgba(8,16,25,0.96))] p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition-shadow hover:shadow-cyan-glow"
+      className={cn(
+        "group relative overflow-hidden rounded-2xl border border-accent/15 bg-[linear-gradient(180deg,rgba(10,21,32,0.96),rgba(8,16,25,0.96))] p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition-shadow hover:shadow-cyan-glow",
+        offline && "border-danger/30 opacity-60",
+      )}
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,212,255,0.08),transparent_34%)] opacity-80" />
-      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-        <div className="absolute inset-0 bg-[repeating-linear-gradient(180deg,rgba(255,255,255,0.05)_0,rgba(255,255,255,0.05)_1px,transparent_1px,transparent_4px)] opacity-[0.08]" />
-      </div>
       {isProbing && !reducedMotion ? (
         <motion.div
           initial={{ opacity: 0 }}
@@ -63,13 +64,9 @@ export function FeedProviderCard({
           className="pointer-events-none absolute inset-0"
         >
           <div className="absolute inset-0 animate-shimmer bg-[linear-gradient(120deg,transparent,rgba(0,212,255,0.12),transparent)]" />
-          <motion.div
-            className="absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent/30"
-            animate={{ scale: [0.8, 1.25], opacity: [0, 0.8, 0] }}
-            transition={{ duration: 1.6, repeat: 1 }}
-          />
         </motion.div>
       ) : null}
+
       <div className="relative space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
@@ -98,7 +95,7 @@ export function FeedProviderCard({
                     />
                   ) : null}
                 </span>
-                {provider.status}
+                {provider.status === "DEGRADED" ? "AUTH FAIL" : provider.status}
               </div>
               <span className="rounded-full border border-success/25 bg-success/10 px-3 py-1 font-data text-[11px] uppercase tracking-[0.18em] text-success">
                 HTTP {provider.httpCode}
@@ -127,7 +124,18 @@ export function FeedProviderCard({
             <span>Latest Scan</span>
             <span className="text-accent">{provider.latestScan.url ? "Live" : "Probe Snapshot"}</span>
           </div>
-          <TerminalLog lines={terminalLines} verdict={provider.latestScan.verdict} />
+          {offline ? (
+            <div className="rounded-xl border border-danger/25 bg-danger/5 p-4">
+              <div className="flex items-center gap-2 text-danger">
+                <span>X</span>
+                <span className="font-data text-xs">
+                  {String(provider.latestScan.fields.find((field) => field.label === "Error")?.value || "Connection refused")}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <TerminalLog lines={terminalLines} verdict={provider.latestScan.verdict} />
+          )}
         </div>
 
         <div className="space-y-3">

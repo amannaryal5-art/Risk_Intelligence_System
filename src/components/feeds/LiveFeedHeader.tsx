@@ -3,6 +3,8 @@
 import { motion, useReducedMotion } from "framer-motion";
 
 import { ProbeButton } from "@/components/feeds/ProbeButton";
+import { PulseDot } from "@/components/shared/PulseDot";
+import { cn } from "@/lib/utils";
 
 export function LiveFeedHeader({
   formattedTime,
@@ -27,20 +29,21 @@ export function LiveFeedHeader({
         <div className="font-data text-xs uppercase tracking-[0.28em] text-muted">
           Feeds &gt; Live Feed Status
         </div>
-        <div className="flex items-center justify-center">
+        <div className="flex items-center justify-center gap-3">
           <div className="inline-flex items-center gap-3 rounded-full border border-success/30 bg-success/10 px-4 py-2 font-data text-xs uppercase tracking-[0.26em] text-success shadow-green-glow">
-            <span className="relative flex h-3 w-3 items-center justify-center">
-              <span className="h-2 w-2 rounded-full bg-success" />
-              {!reducedMotion ? (
-                <motion.span
-                  className="absolute inset-0 rounded-full border border-success/60"
-                  animate={{ scale: [1, 1.8], opacity: [1, 0] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                />
-              ) : null}
-            </span>
+            <PulseDot color="success" />
             <span className="animate-blink">Live</span>
           </div>
+          <span
+            className={cn(
+              "rounded-full border px-3 py-1 font-data text-[10px] uppercase tracking-[0.2em]",
+              isConnected
+                ? "border-success/30 bg-success/10 text-success"
+                : "border-warning/30 bg-warning/10 text-warning",
+            )}
+          >
+            {isConnected ? "WS Connected" : "Polling 30s"}
+          </span>
         </div>
         <div className="flex items-center justify-start gap-4 lg:justify-end">
           <div className="font-data text-sm text-slate-200">
@@ -62,7 +65,11 @@ export function LiveFeedHeader({
           {isConnected ? "Live websocket transport connected" : "Polling fallback active"}
         </div>
         <div className="h-px overflow-hidden rounded-full bg-white/5">
-          <div className="h-full w-full animate-dash bg-[linear-gradient(90deg,transparent,rgba(0,212,255,0.8),transparent)] bg-[length:120px_1px]" />
+          <motion.div
+            className="h-full w-full bg-[linear-gradient(90deg,transparent,rgba(0,212,255,0.8),transparent)] bg-[length:120px_1px]"
+            animate={reducedMotion ? undefined : { backgroundPosition: ["0 0", "120px 0"] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+          />
         </div>
       </div>
     </header>

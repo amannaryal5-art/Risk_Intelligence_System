@@ -1,5 +1,6 @@
 "use client";
 
+import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 
 import { IOCTable } from "@/components/results/IOCTable";
@@ -9,55 +10,57 @@ import { VerdictBadge } from "@/components/results/VerdictBadge";
 import { WebsitePanel } from "@/components/results/WebsitePanel";
 import type { UnifiedAnalysisResult } from "@/types/analysis";
 
-const tabs = ["signals", "ioc", "website", "raw"] as const;
+const tabs = [
+  { id: "signals", label: "Signals" },
+  { id: "ioc", label: "IOC Intel" },
+  { id: "website", label: "Website" },
+  { id: "raw", label: "Raw JSON" },
+] as const;
 
 export function ResultsPanel({ result }: { result: UnifiedAnalysisResult }) {
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("signals");
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("signals");
+  const reducedMotion = useReducedMotion();
 
   return (
-    <section className="rounded-[2rem] border border-accent/15 bg-[linear-gradient(180deg,rgba(10,16,24,0.98),rgba(7,12,19,0.98))] p-6 shadow-cyan-glow">
-      <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        <div className="space-y-4">
+    <motion.section
+      initial={reducedMotion ? false : { y: 30, opacity: 0 }}
+      animate={reducedMotion ? undefined : { y: 0, opacity: 1 }}
+      className="rounded-2xl border border-accent/15 bg-gradient-to-b from-surface to-panel p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+    >
+      <div className="space-y-4">
+        <div className="flex flex-col items-center gap-4 text-center">
           <RiskGauge score={result.score} />
           <VerdictBadge verdict={result.verdict} />
+          <p className="max-w-md font-data text-sm leading-relaxed text-slate-400">
+            {result.summary}
+          </p>
         </div>
-        <div className="space-y-5">
-          <div>
-            <div className="font-data text-xs uppercase tracking-[0.24em] text-accent">
-              Unified Report
-            </div>
-            <div className="mt-2 font-heading text-3xl uppercase tracking-[0.06em] text-white">
-              {result.summary}
-            </div>
-          </div>
 
-          <div className="flex flex-wrap gap-2">
-            {tabs.map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                className={`rounded-full border px-4 py-2 font-data text-xs uppercase tracking-[0.18em] transition ${
-                  activeTab === tab
-                    ? "border-accent/30 bg-accent/15 text-accent"
-                    : "border-white/8 bg-white/[0.03] text-muted"
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === "signals" ? <SignalsList signals={result.signals} /> : null}
-          {activeTab === "ioc" ? <IOCTable threatIntel={result.threatIntel} /> : null}
-          {activeTab === "website" ? <WebsitePanel websiteIntel={result.websiteIntel} /> : null}
-          {activeTab === "raw" ? (
-            <pre className="max-h-[420px] overflow-auto rounded-2xl border border-white/8 bg-black/30 p-4 font-data text-xs text-slate-300">
-              {JSON.stringify(result.raw, null, 2)}
-            </pre>
-          ) : null}
+        <div className="flex rounded-xl border border-white/8 bg-white/[0.02] p-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={
+                activeTab === tab.id
+                  ? "flex-1 rounded-lg bg-accent/15 px-3 py-2 font-data text-[11px] uppercase tracking-[0.18em] text-accent shadow-[0_0_12px_rgba(0,212,255,0.12)] transition-all duration-200"
+                  : "flex-1 rounded-lg px-3 py-2 font-data text-[11px] uppercase tracking-[0.18em] text-muted transition-all duration-200 hover:text-white"
+              }
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+
+        {activeTab === "signals" ? <SignalsList signals={result.signals} /> : null}
+        {activeTab === "ioc" ? <IOCTable threatIntel={result.threatIntel} /> : null}
+        {activeTab === "website" ? <WebsitePanel websiteIntel={result.websiteIntel} /> : null}
+        {activeTab === "raw" ? (
+          <pre className="max-h-64 overflow-auto rounded-xl border border-white/8 bg-bg p-4 font-data text-[11px] leading-5 text-green-400/80">
+            {JSON.stringify(result.raw, null, 2)}
+          </pre>
+        ) : null}
       </div>
-    </section>
+    </motion.section>
   );
 }

@@ -97,5 +97,6 @@ export function useLiveFeedPolling(apiKey?: string) {
     isProbing,
     runProbe,
     formattedTime,
+    lastUpdated,
   };
 }
