@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -10,11 +12,26 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.main import app as backend_app
-
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
+
+
+def _load_backend_app():
+    app_dir = BASE_DIR / "app"
+    app_dir_str = str(app_dir)
+    if app_dir_str not in sys.path:
+        sys.path.insert(0, app_dir_str)
+    backend_path = BASE_DIR / "app" / "main.py"
+    spec = importlib.util.spec_from_file_location("riskintel_backend_main", backend_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load backend app from {backend_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.app
+
+
+backend_app = _load_backend_app()
 
 app = FastAPI(
     title="RiskIntel v3.0 UI",
