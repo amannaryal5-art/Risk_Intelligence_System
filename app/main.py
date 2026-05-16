@@ -19,8 +19,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 if __package__:
@@ -146,7 +145,6 @@ class FeedConfigRequest(BaseModel):
 # Application bootstrap
 # ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
 DEFAULT_DATA_DIR = str(Path(tempfile.gettempdir()) / "riskintel") if os.getenv("VERCEL") else str(BASE_DIR / "data")
 DATA_DIR = Path(os.getenv("RISKINTEL_DATA_DIR", DEFAULT_DATA_DIR))
 logger = logging.getLogger("riskintel")
@@ -208,12 +206,15 @@ app = FastAPI(
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
 @app.get("/")
-async def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+async def root() -> dict:
+    return {
+        "service": "risk-intelligence-system",
+        "status": "ok",
+        "ui": "removed",
+        "docs": "/docs",
+        "health": "/api/v1/health",
+    }
 
 AUTH_ENFORCED = os.getenv("RISKINTEL_ENFORCE_AUTH", "true").lower() == "true"
 DEFAULT_API_KEY = os.getenv("RISKINTEL_DEFAULT_API_KEY", "").strip()
@@ -652,18 +653,6 @@ def require_roles(*roles: str):
 # ─────────────────────────────────────────────────────
 # Static routes
 # ─────────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-async def root() -> HTMLResponse:
-    with (STATIC_DIR / "index.html").open("r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
-
-
-@app.get("/scamcheck", response_class=HTMLResponse)
-async def scamcheck_page() -> HTMLResponse:
-    with (STATIC_DIR / "scamcheck.html").open("r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
-
-
 @app.get("/api/v1/health")
 async def health() -> dict:
     return {

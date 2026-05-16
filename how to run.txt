@@ -10,5 +10,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 # Step 4 — install dependencies
 pip install -r requirements.txt
 
-# Step 5 — start the server
+# Step 5 — start the API server
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# Step 6 — open API docs
+# http://127.0.0.1:8000/docs
