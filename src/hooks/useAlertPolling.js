@@ -5,6 +5,9 @@ export function useAlertPolling() {
   return useQuery({
     queryKey: ['aria', 'alerts'],
     queryFn: getAriaAlerts,
-    refetchInterval: 60000,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    staleTime: 10000,
   })
 }

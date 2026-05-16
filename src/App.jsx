@@ -1,8 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuthStore } from './store/authStore'
-import { useFeedStatus } from './hooks/useFeedStatus'
-import { useAlertPolling } from './hooks/useAlertPolling'
 import Shell from './components/layout/Shell'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -16,6 +14,7 @@ import CaseDetail from './pages/CaseDetail'
 import ARIA from './pages/ARIA'
 import Assets from './pages/Assets'
 import Alerts from './pages/Alerts'
+import AutoPilot from './pages/AutoPilot'
 import Reports from './pages/Reports'
 import FeedStatus from './pages/FeedStatus'
 import Admin from './pages/Admin'
@@ -23,12 +22,9 @@ import Admin from './pages/Admin'
 function ProtectedLayout() {
   const location = useLocation()
   const user = useAuthStore((state) => state.user)
-  useFeedStatus()
-  const alertsQuery = useAlertPolling()
-  const unseenCount = (alertsQuery.data || []).filter((item) => !item.seen).length
 
   return (
-    <Shell unseenCount={unseenCount} userRole={user?.role}>
+    <Shell userRole={user?.role}>
       <motion.div key={location.pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mx-auto w-full max-w-[1600px]">
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -42,6 +38,7 @@ function ProtectedLayout() {
           <Route path="/aria" element={<ARIA />} />
           <Route path="/assets" element={<Assets />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/autopilot" element={<AutoPilot />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/feeds" element={<FeedStatus />} />
           <Route path="/admin" element={user?.role === 'admin' ? <Admin /> : <Navigate to="/" replace />} />

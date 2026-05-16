@@ -5,7 +5,12 @@ import Spinner from '../components/ui/Spinner'
 import { formatDate } from '../lib/utils'
 
 export default function Assets() {
-  const assetsQuery = useQuery({ queryKey: ['aria', 'assets'], queryFn: getAriaAssets })
+  const assetsQuery = useQuery({
+    queryKey: ['aria', 'assets'],
+    queryFn: getAriaAssets,
+    refetchInterval: 15000,
+    refetchIntervalInBackground: true,
+  })
 
   if (assetsQuery.isLoading) return <div className="panel p-6"><Spinner /></div>
 

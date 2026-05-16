@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+.autopilot-progress {
+  animation: autopilot-progress 1.2s ease-in-out infinite;
+}
+
+@keyframes autopilot-progress {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: translateX(-30%);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(100%);
+  }
+}
+
 :root {
   --bg-primary: #080c14;
   --bg-surface: #0d1220;

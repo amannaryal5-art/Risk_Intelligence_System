@@ -400,8 +400,8 @@ db = AssetDB()
 async def run_monitoring_cycle():
     """
     Check all assets due for scanning, run scans, save results, raise alerts.
-    Called every 30 minutes by the scheduler — only scans assets whose
-    interval has elapsed.
+    Called on a fixed scheduler cadence and only scans assets whose
+    last_scanned time plus scan_interval_hours is overdue.
     """
     due = db.get_due_assets()
     if not due:

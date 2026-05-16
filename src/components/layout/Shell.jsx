@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import FeedStatusBar from './FeedStatusBar'
+import { useAlertPolling } from '../../hooks/useAlertPolling'
+import { useFeedStatus } from '../../hooks/useFeedStatus'
 import { useWsStore } from '../../store/wsStore'
 
 const commandItems = [
   ['Dashboard', '/'],
+  ['AutoPilot', '/autopilot'],
   ['Analyze', '/analyze'],
   ['Threat Intel', '/threat-intel'],
   ['Website Intel', '/website-intel'],
@@ -21,8 +24,10 @@ const commandItems = [
   ['Admin', '/admin'],
 ]
 
-export default function Shell({ children, unseenCount = 0, userRole = 'viewer' }) {
+export default function Shell({ children, userRole = 'viewer' }) {
   const navigate = useNavigate()
+  useFeedStatus()
+  const alertsQuery = useAlertPolling()
   const feedStatus = useWsStore((state) => state.feedStatus)
   const connected = useWsStore((state) => state.connected)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -46,6 +51,7 @@ export default function Shell({ children, unseenCount = 0, userRole = 'viewer' }
   }, [query, userRole])
 
   const liveCount = feedStatus?.summary?.auth_valid || 0
+  const unseenCount = (alertsQuery.data || []).filter((item) => !item.seen).length
 
   return (
     <div className="flex min-h-screen bg-transparent text-slate-50">

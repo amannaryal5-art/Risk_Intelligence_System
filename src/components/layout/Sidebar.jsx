@@ -1,11 +1,12 @@
 import { motion } from 'framer-motion'
-import { Activity, Bell, Bot, BriefcaseBusiness, Files, Gauge, Globe, Radar, Search, ShieldAlert, ShieldCheck, Bug, Network, Settings, FolderKanban } from 'lucide-react'
+import { Activity, Bell, Bot, BriefcaseBusiness, Files, Gauge, Globe, Radar, Search, ShieldAlert, ShieldCheck, Bug, Network, Settings, FolderKanban, Zap } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import FeedDot from '../ui/FeedDot'
 import { useAuthStore } from '../../store/authStore'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Gauge },
+  { to: '/autopilot', label: 'AutoPilot', icon: Zap },
   { to: '/analyze', label: 'Analyze', icon: Search },
   { to: '/threat-intel', label: 'Threat Intel', icon: Radar },
   { to: '/website-intel', label: 'Website Intel', icon: Globe },

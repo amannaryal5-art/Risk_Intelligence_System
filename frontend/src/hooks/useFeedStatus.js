@@ -11,7 +11,8 @@ export function useFeedStatus() {
   const query = useQuery({
     queryKey: ['feeds', 'status'],
     queryFn: getFeedsStatus,
-    refetchInterval: 120000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
   })
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function useFeedStatus() {
         setConnected(false)
         if (stopped) return
         const delay = retry
-        retry = Math.min(retry * 2, 30000)
+        retry = Math.min(retry * 2, 8000)
         window.setTimeout(connect, delay)
       }
     }

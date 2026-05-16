@@ -691,13 +691,17 @@ async def startup_diagnostics() -> None:
         logger.info("Skipping startup feed probe on Vercel serverless runtime")
         logger.info("=====================================")
         return
-    try:
-        results = await refresh_feed_status_cache()
-        for feed in results.get("feeds", []):
-            state = "LIVE" if feed.get("auth_valid") else ("AUTH FAIL" if feed.get("reachable") else "OFFLINE")
-            logger.info("  %s: %s", feed.get("name"), state)
-    except Exception as exc:
-        logger.warning("Initial feed probe failed: %s", exc)
+    for attempt in range(1, 4):
+        try:
+            results = await refresh_feed_status_cache()
+            for feed in results.get("feeds", []):
+                state = "LIVE" if feed.get("auth_valid") else ("AUTH FAIL" if feed.get("reachable") else "OFFLINE")
+                logger.info("  %s: %s", feed.get("name"), state)
+            break
+        except Exception as exc:
+            logger.warning("Feed probe attempt %d/3 failed: %s", attempt, exc)
+            if attempt < 3:
+                await asyncio.sleep(5)
     logger.info("=====================================")
 
 
@@ -1168,7 +1172,7 @@ async def _aria_startup():
         return
     if _SCHEDULER_OK and _scheduler:
         _scheduler.add_job(
-            run_monitoring_cycle, "interval", minutes=30, id="aria_monitor"
+            run_monitoring_cycle, "interval", minutes=10, id="aria_monitor"
         )
         _scheduler.add_job(
             run_daily_report, "cron", hour=8, minute=0, id="aria_daily_report"
@@ -1231,6 +1235,13 @@ async def aria_scan_now(aid: int):
         raise HTTPException(404, "Asset not found")
     _asyncio.create_task(_background_scan(aid, asset))
     return {"status": "scanning", "message": "Scan started - results in ~15 seconds"}
+
+
+@app.post("/api/aria/monitoring/run")
+async def aria_run_monitoring_cycle():
+    due_assets = _db.get_due_assets()
+    await run_monitoring_cycle()
+    return {"status": "completed", "scanned": len(due_assets)}
 
 
 @app.get("/api/aria/assets/{aid}/history")

@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Activity, Bell, Bot, BriefcaseBusiness, Files, Gauge, Globe, Radar, Search, ShieldAlert, ShieldCheck, Bug, Network, Settings, FolderKanban } from 'lucide-react'
+import { Activity, Bell, Bot, BriefcaseBusiness, Files, Gauge, Globe, Radar, Search, ShieldAlert, ShieldCheck, Bug, Network, Settings, FolderKanban, Zap } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import FeedDot from '../ui/FeedDot'
 import { useAuthStore } from '../../store/authStore'
@@ -17,6 +17,7 @@ const navItems = [
   { to: '/aria', label: 'ARIA', icon: Bot },
   { to: '/assets', label: 'Assets', icon: BriefcaseBusiness },
   { to: '/alerts', label: 'Alerts', icon: Bell, badgeKey: 'alerts' },
+  { to: '/autopilot', label: 'AutoPilot', icon: Zap },
   { to: '/reports', label: 'Reports', icon: Files },
   { divider: true },
   { to: '/feeds', label: 'Feed Status', icon: Network, badgeKey: 'feeds' },

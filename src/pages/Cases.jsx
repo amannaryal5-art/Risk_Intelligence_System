@@ -24,6 +24,8 @@ export default function Cases() {
   const casesQuery = useQuery({
     queryKey: ['cases', filters],
     queryFn: () => listCases(filters),
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
   })
 
   const createMutation = useMutation({

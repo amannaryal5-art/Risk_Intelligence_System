@@ -5,7 +5,12 @@ import { formatDate } from '../lib/utils'
 
 export default function Alerts() {
   const queryClient = useQueryClient()
-  const alertsQuery = useQuery({ queryKey: ['aria', 'alerts'], queryFn: getAriaAlerts, refetchInterval: 60000 })
+  const alertsQuery = useQuery({
+    queryKey: ['aria', 'alerts'],
+    queryFn: getAriaAlerts,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+  })
   const seenMutation = useMutation({
     mutationFn: (id) => markAriaAlertSeen(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['aria', 'alerts'] }),

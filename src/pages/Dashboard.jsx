@@ -14,9 +14,24 @@ import { normalizeRiskLevel, readHistory, truncate, formatDate } from '../lib/ut
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth })
-  const { data: caseData } = useQuery({ queryKey: ['cases', 'recent'], queryFn: () => listCases({ limit: 5 }) })
-  const { data: ariaStats } = useQuery({ queryKey: ['aria', 'stats'], queryFn: getAriaStats })
+  const { data: health } = useQuery({
+    queryKey: ['health'],
+    queryFn: getHealth,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
+  })
+  const { data: caseData } = useQuery({
+    queryKey: ['cases', 'recent'],
+    queryFn: () => listCases({ limit: 5 }),
+    refetchInterval: 20000,
+    refetchIntervalInBackground: true,
+  })
+  const { data: ariaStats } = useQuery({
+    queryKey: ['aria', 'stats'],
+    queryFn: getAriaStats,
+    refetchInterval: 20000,
+    refetchIntervalInBackground: true,
+  })
   const alertsQuery = useAlertPolling()
   const feedStatus = useWsStore((state) => state.feedStatus)
 
