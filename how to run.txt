@@ -15,3 +15,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 # Step 6 — open API docs
 # http://127.0.0.1:8000/docs
+
+cd C:\git\Risk_Intelligence_System\frontend
+npm install
+npm run dev
