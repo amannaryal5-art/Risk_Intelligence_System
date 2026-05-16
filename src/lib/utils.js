@@ -1,7 +1,20 @@
 import clsx from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
-export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+const DEFAULT_LOCAL_API_BASE = 'http://127.0.0.1:8000'
+
+function resolveApiBase() {
+  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return window.location.origin
+    }
+  }
+  return DEFAULT_LOCAL_API_BASE
+}
+
+export const API_BASE = resolveApiBase()
 
 export const RISK_COLORS = {
   critical: { bg: 'bg-red-900/30', text: 'text-red-400', border: 'border-red-700', dot: '#dc2626' },
