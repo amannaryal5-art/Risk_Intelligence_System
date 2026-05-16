@@ -147,6 +147,33 @@ export default function AutoPilot() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [log])
 
+  const runTask = useCallback(async (task) => {
+    const startedAt = Date.now()
+    setTaskStates((current) => ({
+      ...current,
+      [task.id]: { status: STATUS.running, detail: 'Running...', ms: 0 },
+    }))
+    addLog(`-> ${task.label}`)
+
+    try {
+      const result = await task.run()
+      const ms = Date.now() - startedAt
+      setTaskStates((current) => ({
+        ...current,
+        [task.id]: { status: STATUS.done, detail: result.detail, ms, error: '' },
+      }))
+      addLog(`OK ${task.label} - ${result.detail} (${ms}ms)`, 'ok')
+    } catch (error) {
+      const ms = Date.now() - startedAt
+      const detail = error?.response?.data?.detail ?? error?.message ?? 'Unknown error'
+      setTaskStates((current) => ({
+        ...current,
+        [task.id]: { status: STATUS.error, detail, ms, error: detail },
+      }))
+      addLog(`ERR ${task.label} - ${detail}`, 'err')
+    }
+  }, [addLog])
+
   const runAll = useCallback(async () => {
     if (running) return
 
@@ -165,30 +192,7 @@ export default function AutoPilot() {
     })
 
     for (const task of toRun) {
-      const startedAt = Date.now()
-      setTaskStates((current) => ({
-        ...current,
-        [task.id]: { status: STATUS.running, detail: 'Running...', ms: 0 },
-      }))
-      addLog(`-> ${task.label}`)
-
-      try {
-        const result = await task.run()
-        const ms = Date.now() - startedAt
-        setTaskStates((current) => ({
-          ...current,
-          [task.id]: { status: STATUS.done, detail: result.detail, ms },
-        }))
-        addLog(`OK ${task.label} - ${result.detail} (${ms}ms)`, 'ok')
-      } catch (error) {
-        const ms = Date.now() - startedAt
-        const detail = error?.response?.data?.detail ?? error?.message ?? 'Unknown error'
-        setTaskStates((current) => ({
-          ...current,
-          [task.id]: { status: STATUS.error, detail, ms },
-        }))
-        addLog(`ERR ${task.label} - ${detail}`, 'err')
-      }
+      await runTask(task)
     }
 
     queryClient.invalidateQueries()
@@ -196,7 +200,7 @@ export default function AutoPilot() {
     setLastRun(finishedAt)
     addLog(`Done at ${finishedAt.toLocaleTimeString()}`, 'start')
     setRunning(false)
-  }, [addLog, queryClient, running, selected])
+  }, [addLog, queryClient, runTask, running, selected])
 
   useAutoInterval(runAll, autoIntervalMin * 60 * 1000, autoMode && !running)
 
@@ -256,7 +260,7 @@ export default function AutoPilot() {
                     : 'bg-blue-600 hover:bg-blue-500'
             }`}
           >
-            {running ? 'Running...' : allDone ? 'Run Again' : 'Run All Now'}
+            {running ? 'Running...' : allDone ? 'Run Again' : 'Run All Tasks'}
           </button>
 
           <label className="flex items-center gap-3 text-sm text-slate-300">
@@ -334,6 +338,16 @@ export default function AutoPilot() {
                 </span>
                 {state.ms > 0 ? <span className="ml-auto text-[11px] text-slate-500">{state.ms}ms</span> : null}
               </div>
+
+              {state.detail ? (
+                <p className={`mt-3 text-xs ${statusClasses[state.status]}`}>{state.detail}</p>
+              ) : null}
+
+              {state.status === STATUS.error && state.error ? (
+                <div className="mt-3 inline-flex rounded-full bg-red-500/15 px-3 py-1 text-xs text-red-300">
+                  {state.error}
+                </div>
+              ) : null}
 
               {state.status === STATUS.running ? (
                 <div className="mt-3 h-1 overflow-hidden rounded-full bg-slate-800">

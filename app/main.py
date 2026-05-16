@@ -133,7 +133,8 @@ class CaseUpdateRequest(BaseModel):
 
 
 class CommentCreateRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=1200)
+    message: Optional[str] = Field(default=None, min_length=1, max_length=1200)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=1200)
 
 
 class FeedConfigRequest(BaseModel):
@@ -1129,8 +1130,11 @@ async def delete_case(case_id: int, user: UserContext = Depends(get_current_user
 
 @app.post("/api/v1/cases/{case_id}/comments", dependencies=[Depends(require_roles("admin", "analyst"))])
 async def add_case_comment(case_id: int, payload: CommentCreateRequest, user: UserContext = Depends(get_current_user)) -> dict:
+    comment_text = (payload.message or payload.body or "").strip()
+    if not comment_text:
+        raise HTTPException(status_code=400, detail="Comment body is required")
     try:
-        comment = case_store.add_comment(case_id, user.username, payload.message)
+        comment = case_store.add_comment(case_id, user.username, comment_text)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     case_store.audit(user.username, user.role, "add_case_comment", "case", str(case_id))
@@ -1239,9 +1243,13 @@ async def aria_scan_now(aid: int):
 
 @app.post("/api/aria/monitoring/run")
 async def aria_run_monitoring_cycle():
-    due_assets = _db.get_due_assets()
+    assets = _db.get_assets()
     await run_monitoring_cycle()
-    return {"status": "completed", "scanned": len(due_assets)}
+    return {
+        "status": "ok",
+        "scanned": len(assets),
+        "triggered_at": datetime.utcnow().isoformat(),
+    }
 
 
 @app.get("/api/aria/assets/{aid}/history")
@@ -1332,7 +1340,7 @@ async def aria_get_report(rid: int):
 @app.post("/api/aria/reports/generate")
 async def aria_generate_report():
     rid = await run_daily_report()
-    return {"id": rid, "status": "generated"}
+    return {"id": rid, "status": "ok"}
 
 
 @app.get("/{full_path:path}")

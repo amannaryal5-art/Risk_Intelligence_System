@@ -93,7 +93,7 @@ export default function Sidebar({ unseenCount = 0, feedLive = false }) {
 
       <nav className="fixed bottom-12 left-0 right-0 z-20 border-t border-border bg-[#070b12]/96 px-2 py-2 lg:hidden">
         <div className="grid grid-cols-5 gap-1">
-          {['/', '/analyze', '/cases', '/aria', '/feeds'].map((path) => {
+          {['/', '/analyze', '/threat-intel', '/cases', '/aria'].map((path) => {
             const item = navItems.find((entry) => entry.to === path) || { to: path, label: path, icon: ShieldAlert }
             const Icon = item.icon
             return (

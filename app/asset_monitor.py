@@ -34,6 +34,18 @@ def _env_value(*names: str) -> str:
             return value
     return ""
 
+
+def _ai_exports():
+    """Import AI helpers in both package and script execution modes."""
+    try:
+        if __package__:
+            from .ai_engine import analyze_threat, generate_daily_report
+        else:
+            from ai_engine import analyze_threat, generate_daily_report
+    except ImportError:
+        from ai_engine import analyze_threat, generate_daily_report
+    return analyze_threat, generate_daily_report
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 class AssetDB:
@@ -97,11 +109,11 @@ class AssetDB:
     def add_asset(self, name: str, asset_type: str, value: str, interval: int = 6) -> int:
         with self._conn() as c:
             try:
-                c.execute(
+                cur = c.execute(
                     "INSERT INTO assets (name,type,value,scan_interval_hours) VALUES (?,?,?,?)",
                     (name.strip(), asset_type, value.strip(), interval),
                 )
-                return c.lastrowid
+                return int(cur.lastrowid)
             except sqlite3.IntegrityError:
                 row = c.execute("SELECT id FROM assets WHERE value=?", (value.strip(),)).fetchone()
                 return row["id"]
@@ -157,7 +169,7 @@ class AssetDB:
 
     def save_scan(self, asset_id: int, ai_result: Dict, raw_data: Dict) -> int:
         with self._conn() as c:
-            c.execute("""
+            cur = c.execute("""
                 INSERT INTO scan_results
                 (asset_id,risk_level,risk_score,summary,key_findings,
                  threat_indicators,recommendations,threat_categories,raw_data)
@@ -173,7 +185,7 @@ class AssetDB:
                 json.dumps(ai_result.get("threat_categories", [])),
                 json.dumps(raw_data),
             ))
-            return c.lastrowid
+            return int(cur.lastrowid)
 
     def get_recent_scans(self, hours: int = 24) -> List[Dict]:
         since = (datetime.now() - timedelta(hours=hours)).isoformat()
@@ -228,8 +240,8 @@ class AssetDB:
 
     def save_report(self, title: str, content: str) -> int:
         with self._conn() as c:
-            c.execute("INSERT INTO reports (title,content) VALUES (?,?)", (title, content))
-            return c.lastrowid
+            cur = c.execute("INSERT INTO reports (title,content) VALUES (?,?)", (title, content))
+            return int(cur.lastrowid)
 
     def get_reports(self, limit: int = 20) -> List[Dict]:
         with self._conn() as c:
@@ -370,7 +382,7 @@ async def scan_asset(asset: Dict) -> Dict[str, Any]:
     Run all available threat intel checks on an asset, then use AI to analyze results.
     Returns the AI-structured result dict.
     """
-    from ai_engine import analyze_threat
+    analyze_threat, _ = _ai_exports()
 
     target      = asset["value"]
     asset_type  = asset["type"]   # domain | ip | url | email
@@ -432,7 +444,7 @@ async def run_monitoring_cycle():
 
 async def run_daily_report():
     """Generate and save an AI daily threat briefing. Called at 08:00 daily."""
-    from ai_engine import generate_daily_report
+    _, generate_daily_report = _ai_exports()
 
     assets       = db.get_assets()
     recent_scans = db.get_recent_scans(24)

@@ -6,7 +6,7 @@ import { getWebsiteIntel, traceWebsite } from '../api/threatIntel'
 import RiskBadge from '../components/ui/RiskBadge'
 import ScoreRing from '../components/ui/ScoreRing'
 import Spinner from '../components/ui/Spinner'
-import { formatDate, pushHistory, readHistory } from '../lib/utils'
+import { downloadJson, formatDate, pushHistory, readHistory } from '../lib/utils'
 
 export default function WebsiteIntel() {
   const [tab, setTab] = useState('Quick Scan')
@@ -60,17 +60,17 @@ export default function WebsiteIntel() {
             <div className="panel-elevated p-6">
               <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex items-center gap-6">
-                  <ScoreRing score={quickScan.data.riskScore} size={130} />
+                  <ScoreRing score={quickScan.data.riskScore || quickScan.data.risk_score || 0} size={130} />
                   <div>
-                    <p className="font-mono text-xl text-slate-50">{quickScan.data.domain}</p>
+                    <p className="font-mono text-xl text-slate-50">{quickScan.data.domain || quickScan.data.input || '—'}</p>
                     <p className="mt-2 text-sm text-slate-400">Resolved IP: {quickScan.data.ip || 'unknown'}</p>
                     <div className="mt-4">
-                      <RiskBadge level={quickScan.data.verdict} />
+                      <RiskBadge level={quickScan.data.verdict || quickScan.data.risk_level || 'unknown'} />
                     </div>
                   </div>
                 </div>
                 <div className="rounded-2xl border border-border bg-slate-950/50 p-4 text-sm text-slate-300">
-                  <p>{quickScan.data.summary}</p>
+                  <p>{quickScan.data.summary || '—'}</p>
                   <p className="mt-3 text-xs text-slate-500">Scanned at {formatDate(new Date().toISOString())}</p>
                 </div>
               </div>
@@ -78,6 +78,44 @@ export default function WebsiteIntel() {
                 <div className="panel p-4"><p className="section-title">OTX Pulses</p><p className="mt-3 font-mono text-2xl">{quickScan.data?.feeds?.otx?.pulseCount || 0}</p></div>
                 <div className="panel p-4"><p className="section-title">AbuseIPDB Confidence</p><p className="mt-3 font-mono text-2xl">{quickScan.data?.feeds?.abuseipdb?.abuseConfidence || 0}%</p></div>
                 <div className="panel p-4"><p className="section-title">VT Malicious</p><p className="mt-3 font-mono text-2xl">{quickScan.data?.feeds?.virustotal?.malicious || 0}</p></div>
+              </div>
+              <div className="mt-6 grid gap-6 xl:grid-cols-2">
+                <div className="overflow-hidden rounded-2xl border border-border">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="bg-slate-950/80 text-slate-400">
+                      <tr>
+                        <th className="px-4 py-3">IOC Type</th>
+                        <th className="px-4 py-3">Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        ['Domains', quickScan.data.domains || quickScan.data?.ioc_intelligence?.domains || []],
+                        ['IPs', quickScan.data.ips || quickScan.data?.ioc_intelligence?.ips || []],
+                        ['URLs', quickScan.data.urls || quickScan.data?.ioc_intelligence?.urls || []],
+                      ].map(([label, values]) => (
+                        <tr key={label} className="border-t border-border bg-surface/70 align-top">
+                          <td className="px-4 py-3 text-slate-300">{label}</td>
+                          <td className="px-4 py-3 text-slate-400">
+                            {values.length ? values.join(', ') : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="rounded-2xl border border-border bg-slate-950/50 p-4">
+                  <p className="section-title">Flags</p>
+                  <ul className="mt-4 space-y-2 text-sm text-slate-300">
+                    {(quickScan.data.flags || quickScan.data.red_flags || []).length ? (
+                      (quickScan.data.flags || quickScan.data.red_flags || []).map((flag, index) => (
+                        <li key={`${flag}-${index}`}>• {flag}</li>
+                      ))
+                    ) : (
+                      <li>—</li>
+                    )}
+                  </ul>
+                </div>
               </div>
             </div>
           ) : null}
@@ -105,9 +143,16 @@ export default function WebsiteIntel() {
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <p className="font-mono text-xl text-slate-50">{deepTrace.data.site_verdict || 'Trace complete'}</p>
-                  <p className="mt-2 text-sm text-slate-400">Pages crawled: {deepTrace.data.pages_crawled || 0} • Coverage: {deepTrace.data.coverage || 'n/a'}</p>
+                  <p className="mt-2 text-sm text-slate-400">Pages crawled: {deepTrace.data.pages_crawled || deepTrace.data.total_pages_crawled || 0} • Coverage: {deepTrace.data.coverage || 'n/a'}</p>
                 </div>
                 <RiskBadge level={deepTrace.data.site_verdict} />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => downloadJson('trace-result.json', deepTrace.data)}
+                >
+                  Download JSON
+                </button>
               </div>
               <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_1fr]">
                 <div className="overflow-hidden rounded-2xl border border-border">
@@ -140,6 +185,30 @@ export default function WebsiteIntel() {
                     {!deepTrace.data.risk_distribution?.length ? <div className="text-sm text-slate-400"><BarChart3 className="mb-2 h-4 w-4" />No histogram buckets returned by the backend.</div> : null}
                   </div>
                 </div>
+              </div>
+              <div className="mt-6 overflow-hidden rounded-2xl border border-border">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-950/80 text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3">IOC Type</th>
+                      <th className="px-4 py-3">Values</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ['Domains', deepTrace.data.domains || deepTrace.data?.aggregated_iocs?.domains || []],
+                      ['IPs', deepTrace.data.ips || deepTrace.data?.aggregated_iocs?.ips || []],
+                      ['URLs', deepTrace.data.urls || deepTrace.data?.aggregated_iocs?.urls || []],
+                    ].map(([label, values]) => (
+                      <tr key={label} className="border-t border-border bg-surface/70 align-top">
+                        <td className="px-4 py-3 text-slate-300">{label}</td>
+                        <td className="px-4 py-3 text-slate-400">
+                          {values.length ? values.join(', ') : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           ) : null}

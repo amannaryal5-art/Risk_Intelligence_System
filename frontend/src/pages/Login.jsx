@@ -52,6 +52,15 @@ export default function Login() {
         </div>
         <div className="mt-8 space-y-4">
           <input className="field" type="password" placeholder="Enter X-API-Key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+          {import.meta.env.DEV ? (
+            <button
+              type="button"
+              className="text-xs text-slate-500 underline hover:text-slate-300"
+              onClick={() => setApiKey('demo123')}
+            >
+              Use default dev key
+            </button>
+          ) : null}
           <button type="button" className="btn-primary w-full" disabled={!apiKey || connect.isPending} onClick={() => connect.mutate()}>
             {connect.isPending ? <Spinner /> : null}
             Connect

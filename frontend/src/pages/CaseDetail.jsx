@@ -24,7 +24,7 @@ export default function CaseDetail() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['case', id] }),
   })
   const commentMutation = useMutation({
-    mutationFn: () => addCaseComment(id, { message: comment }),
+    mutationFn: () => addCaseComment(id, { body: comment }),
     onSuccess: () => {
       setComment('')
       queryClient.invalidateQueries({ queryKey: ['case', id] })
@@ -95,11 +95,16 @@ export default function CaseDetail() {
                 </div>
               ))}
             </div>
-            <div className="mt-4 flex gap-3">
-              <input className="field" placeholder="Add comment" value={comment} onChange={(event) => setComment(event.target.value)} />
+            <div className="mt-4 space-y-3">
+              <textarea
+                className="field min-h-24"
+                placeholder="Add comment"
+                value={comment}
+                onChange={(event) => setComment(event.target.value)}
+              />
               <button type="button" className="btn-primary" disabled={!comment || !canEdit || commentMutation.isPending} onClick={() => commentMutation.mutate()}>
                 {commentMutation.isPending ? <Spinner /> : null}
-                Submit
+                Submit Comment
               </button>
             </div>
           </div>

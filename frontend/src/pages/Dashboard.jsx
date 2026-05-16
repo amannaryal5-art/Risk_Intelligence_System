@@ -75,15 +75,21 @@ export default function Dashboard() {
             <span className="text-xs text-slate-500">Last 20 analyses</span>
           </div>
           <div className="mt-4 h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendData}>
-                <CartesianGrid stroke="#1e2a3a" strokeDasharray="3 3" />
-                <XAxis dataKey="index" stroke="#64748b" />
-                <YAxis stroke="#64748b" />
-                <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="#06b6d4" strokeWidth={2.5} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            {trendData.length === 0 ? (
+              <div className="flex h-80 items-center justify-center text-sm text-slate-500">
+                Run some analyses to see your risk trend
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trendData}>
+                  <CartesianGrid stroke="#1e2a3a" strokeDasharray="3 3" />
+                  <XAxis dataKey="index" stroke="#64748b" />
+                  <YAxis stroke="#64748b" />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="score" stroke="#06b6d4" strokeWidth={2.5} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
@@ -93,14 +99,20 @@ export default function Dashboard() {
             <span className="text-xs text-slate-500">{ariaStats?.total || 0} assets</span>
           </div>
           <div className="mt-4 h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={pieData} dataKey="value" innerRadius={60} outerRadius={90} paddingAngle={3}>
-                  {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {pieData.length === 0 ? (
+              <div className="flex h-80 items-center justify-center text-sm text-slate-500">
+                Add assets to ARIA to see risk distribution
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={pieData} dataKey="value" innerRadius={60} outerRadius={90} paddingAngle={3}>
+                    {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
       </div>

@@ -25,7 +25,11 @@ export default function FeedStatus() {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <button type="button" className="btn-primary" disabled={probeMutation.isPending} onClick={() => probeMutation.mutate()}>
+        <button type="button" className="btn-secondary" disabled={feedsQuery.isFetching} onClick={() => feedsQuery.refetch()}>
+          {feedsQuery.isFetching ? <Spinner /> : null}
+          Probe feeds now
+        </button>
+        <button type="button" className="btn-primary ml-3" disabled={probeMutation.isPending} onClick={() => probeMutation.mutate()}>
           {probeMutation.isPending ? <Spinner /> : null}
           Probe All
         </button>
@@ -44,7 +48,7 @@ export default function FeedStatus() {
                 <p>Configured: {String(feed.configured)}</p>
                 <p>Reachable: {String(feed.reachable)}</p>
                 <p>Auth valid: {String(feed.auth_valid)}</p>
-                <p>Latency: {feed.latency_ms ?? '—'} ms</p>
+                <p>Latency: {feed.latency_ms != null ? `${feed.latency_ms} ms` : '—'}</p>
                 <p>HTTP status: {feed.http_status ?? '—'}</p>
                 <p>Last checked: {formatDate(feed.last_checked)}</p>
                 {feed.error ? <p className="text-red-400">{feed.error}</p> : null}
