@@ -1,23 +1,23 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Rajdhani } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 
 import "@/app/globals.css";
-import { TopBar } from "@/components/shared/TopBar";
+import { AppProviders } from "@/components/shared/AppProviders";
+import { AppShell } from "@/components/layout/AppShell";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+});
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   variable: "--font-jetbrains",
 });
 
-const rajdhani = Rajdhani({
-  subsets: ["latin"],
-  variable: "--font-rajdhani",
-  weight: ["400", "500", "600", "700"],
-});
-
 export const metadata: Metadata = {
-  title: "RiskintelAI War Room",
-  description: "Live Feed Status cyber operations page",
+  title: "ARIA Command",
+  description: "Unified risk intelligence platform command center",
 };
 
 export default function RootLayout({
@@ -27,9 +27,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${jetbrainsMono.variable} ${rajdhani.variable}`}>
-        <TopBar />
-        {children}
+      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>
+        <AppProviders>
+          <AppShell>{children}</AppShell>
+        </AppProviders>
       </body>
     </html>
   );

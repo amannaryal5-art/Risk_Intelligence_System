@@ -7,6 +7,15 @@ import type {
 } from "@/types/analysis";
 import type { CaseListResponse, RiskCase } from "@/types/cases";
 import type { FeedStatusResponse } from "@/types/feeds";
+import type {
+  Asset,
+  AssetAlert,
+  AssetHistoryEntry,
+  AssetStats,
+  AssetSummaryResponse,
+  AssetType,
+  ChatMessage,
+} from "@/lib/types";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "https://risk-intelligence-system.vercel.app";
@@ -27,6 +36,13 @@ export interface FusionPayload {
   max_depth?: number;
   include_external?: boolean;
   exhaustive?: boolean;
+}
+
+interface AddAssetRequest {
+  name: string;
+  type: AssetType;
+  value: string;
+  scan_interval_hours?: number;
 }
 
 function browserApiKey() {
@@ -150,5 +166,21 @@ export const api = {
     delete: (id: number, apiKey?: string) => authenticatedDelete(`/api/v1/cases/${id}`, apiKey),
     addComment: (id: number, message: string, apiKey?: string) =>
       authenticatedPost(`/api/v1/cases/${id}/comments`, { message }, apiKey),
+  },
+  aria: {
+    assets: () => authenticatedGet<Asset[]>("/api/aria/assets"),
+    addAsset: (payload: AddAssetRequest) =>
+      authenticatedPost<{ id: number; status: string; message: string }>("/api/aria/assets", payload),
+    deleteAsset: (id: number) => authenticatedDelete(`/api/aria/assets/${id}`),
+    scanAsset: (id: number) =>
+      authenticatedPost<{ status: string; message: string }>(`/api/aria/assets/${id}/scan`, {}),
+    assetHistory: (id: number) => authenticatedGet<AssetHistoryEntry[]>(`/api/aria/assets/${id}/history`),
+    assetSummary: (id: number) => authenticatedGet<AssetSummaryResponse>(`/api/aria/assets/${id}/summary`),
+    stats: () => authenticatedGet<AssetStats>("/api/aria/stats"),
+    alerts: () => authenticatedGet<AssetAlert[]>("/api/aria/alerts"),
+    markAlertSeen: (id: number) => authenticatedPost<{ status: string }>(`/api/aria/alerts/${id}/seen`, {}),
+    markAllAlertsSeen: () => authenticatedPost<{ status: string }>("/api/aria/alerts/seen-all", {}),
+    chat: (messages: Pick<ChatMessage, "role" | "content">[]) =>
+      authenticatedPost<{ reply: string }>("/api/aria/chat", { messages }),
   },
 };
