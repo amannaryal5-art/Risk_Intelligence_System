@@ -1,8 +1,11 @@
-# Risk Intelligence System API
+# Risk Intelligence System
 
-This repository is backend-only. All frontend/UI files have been removed, and the project now runs as a FastAPI API service.
+CRIE v3.0 now includes both:
 
-## Launch
+- A FastAPI backend at `http://127.0.0.1:8000`
+- A Vite + React command-and-control dashboard for analysts
+
+## Backend Launch
 
 ```bash
 cd C:\git\Risk_Intelligence_System
@@ -13,24 +16,68 @@ copy .env.example .env
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/docs`
+Open backend docs at `http://127.0.0.1:8000/docs`.
+
+## Frontend Launch
+
+```bash
+# Install
+npm install
+
+# Development
+npm run dev
+
+# Build
+npm run build
+
+# Preview
+npm run preview
+```
+
+The frontend reads:
+
+```env
+VITE_API_BASE=http://127.0.0.1:8000
+```
+
+## Frontend Stack
+
+- React 18
+- Vite
+- Tailwind CSS
+- Zustand
+- TanStack Query v5
+- React Router v6
+- Recharts
+- Framer Motion
+- Axios
+- Lucide React
 
 ## Entry Points
 
 - `app/main.py`: primary FastAPI application
 - `app.py`: thin compatibility launcher that imports `app.main:app`
+- `src/App.jsx`: SPA routing and protected app shell
+- `src/components/layout/Shell.jsx`: sidebar, topbar, command palette, live feed strip
 
-## Common API Routes
+## API Highlights
 
-- `GET /`: service status
-- `GET /api/v1/health`: health and configuration summary
-- `POST /api/v1/analyze`: text analysis
-- `POST /api/v1/threat-intel`: IOC enrichment
-- `POST /api/v1/website-intel`: website intelligence
-- `POST /api/aria/chat`: ARIA analyst chat API
-- `GET /api/aria/assets`: monitored assets
+- `GET /api/v1/auth/whoami`
+- `GET /api/v1/health`
+- `POST /api/v1/analyze`
+- `POST /api/v1/analyze/batch`
+- `POST /api/v1/scamcheck`
+- `POST /api/v1/fusion-scan`
+- `POST /api/v1/threat-intel`
+- `POST /api/v1/website-intel`
+- `POST /api/v1/trace-website`
+- `POST /api/v1/malware/analyze-file`
+- `GET /api/v1/cases`
+- `POST /api/aria/chat`
+- `GET /api/aria/assets`
 
 ## Notes
 
 - Swagger UI remains available at `/docs`.
-- The root route `/` now returns JSON instead of serving a web page.
+- The frontend does not use mock data; views are wired to live API endpoints.
+- Vite proxies `/api` to the local FastAPI server in development.
