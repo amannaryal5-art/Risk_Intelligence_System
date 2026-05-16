@@ -95,14 +95,12 @@ class ThreatIntelEngine:
         self.otx_key = os.getenv("RISKINTEL_OTX_API_KEY", "").strip()
         self.abuseipdb_key = os.getenv("RISKINTEL_ABUSEIPDB_API_KEY", "").strip()
         self.vt_key = os.getenv("RISKINTEL_VT_API_KEY", "").strip()
-        self.shodan_key = os.getenv("RISKINTEL_SHODAN_API_KEY", "").strip()
         self.urlscan_key = os.getenv("RISKINTEL_URLSCAN_API_KEY", "").strip()
 
         # Per-provider rate limiters
         self._rl_otx = RateLimiter(calls_per_minute=60)
         self._rl_abuseipdb = RateLimiter(calls_per_minute=30)
         self._rl_vt = RateLimiter(calls_per_minute=4)   # VT free = 4 req/min
-        self._rl_shodan = RateLimiter(calls_per_minute=18)
         self._rl_urlscan = RateLimiter(calls_per_minute=20)
 
         # Shared TTL cache: keyed by ioc_type:value:live
@@ -133,7 +131,7 @@ class ThreatIntelEngine:
     # ──────────────────────────────────────────
     @property
     def live_feeds_available(self) -> bool:
-        return bool(self.otx_key or self.abuseipdb_key or self.vt_key or self.shodan_key or self.urlscan_key)
+        return bool(self.otx_key or self.abuseipdb_key or self.vt_key or self.urlscan_key)
 
     @property
     def live_feed_status(self) -> Dict[str, Dict[str, bool]]:
@@ -164,7 +162,6 @@ class ThreatIntelEngine:
             "otx": {"name": "AlienVault OTX", "configured": bool(self.otx_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "abuseipdb": {"name": "AbuseIPDB", "configured": bool(self.abuseipdb_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "virustotal": {"name": "VirusTotal", "configured": bool(self.vt_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
-            "shodan": {"name": "Shodan", "configured": bool(self.shodan_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "urlscan": {"name": "URLScan.io", "configured": bool(self.urlscan_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
         }
         if probe:
@@ -172,8 +169,7 @@ class ThreatIntelEngine:
                 "otx": (bool(self.otx_key), "https://otx.alienvault.com/api/v1/user/me", {"X-OTX-API-KEY": self.otx_key, "User-Agent": "RiskIntel/3.0"}),
                 "abuseipdb": (bool(self.abuseipdb_key), "https://api.abuseipdb.com/api/v2/check?ipAddress=8.8.8.8&maxAgeInDays=30", {"Key": self.abuseipdb_key, "Accept": "application/json", "User-Agent": "RiskIntel/3.0"}),
                 "virustotal": (bool(self.vt_key), "https://www.virustotal.com/api/v3/users/current", {"x-apikey": self.vt_key, "User-Agent": "RiskIntel/3.0"}),
-                "shodan": (bool(self.shodan_key), f"https://api.shodan.io/api-info?key={self.shodan_key}", {"User-Agent": "RiskIntel/3.0"}),
-                "urlscan": (bool(self.urlscan_key), "https://urlscan.io/user/", {"API-Key": self.urlscan_key, "User-Agent": "RiskIntel/3.0"}),
+                "urlscan": (bool(self.urlscan_key), "https://urlscan.io/api/v1/user/quotas/", {"API-Key": self.urlscan_key, "User-Agent": "RiskIntel/3.0"}),
             }
             futures = {}
             with ThreadPoolExecutor(max_workers=5) as pool:
@@ -376,22 +372,6 @@ class ThreatIntelEngine:
         except Exception:
             return {"enabled": True, "listed": False, "malicious_votes": 0, "source": "virustotal", "error": True}
 
-    def _lookup_shodan(self, ioc_type: str, value: str) -> Dict[str, Any]:
-        if ioc_type != "ip" or not self.shodan_key:
-            return {"enabled": bool(self.shodan_key and ioc_type == "ip"), "listed": False, "source": "shodan"}
-        try:
-            self._rl_shodan.acquire()
-            data = self._http_json(f"https://api.shodan.io/shodan/host/{quote(value)}?key={self.shodan_key}", {"User-Agent": "RiskIntel/3.0"})
-            ports = data.get("ports", [])
-            vulns = list((data.get("vulns") or {}).keys())[:10]
-            org = data.get("org", "")
-            return {
-                "enabled": True, "listed": bool(vulns), "ports": ports[:20],
-                "vulns": vulns, "org": org, "country": data.get("country_name"), "source": "shodan",
-            }
-        except Exception:
-            return {"enabled": True, "listed": False, "source": "shodan", "error": True}
-
     def _lookup_urlscan(self, ioc_type: str, value: str) -> Dict[str, Any]:
         if ioc_type not in {"url", "domain"} or not self.urlscan_key:
             return {"enabled": bool(self.urlscan_key and ioc_type in {"url", "domain"}), "listed": False, "source": "urlscan"}
@@ -429,7 +409,6 @@ class ThreatIntelEngine:
                 (self._lookup_otx, ioc.ioc_type, ioc.value),
                 (self._lookup_abuseipdb, ioc.ioc_type, ioc.value),
                 (self._lookup_virustotal, ioc.ioc_type, ioc.value),
-                (self._lookup_shodan, ioc.ioc_type, ioc.value),
                 (self._lookup_urlscan, ioc.ioc_type, ioc.value),
             ]
             futures = {self._executor.submit(fn, t, v): fn.__name__ for fn, t, v in lookup_fns}
@@ -445,8 +424,6 @@ class ThreatIntelEngine:
             live_score_boost += min(40, listed * 12)
             live_score_boost += min(20, int((next((f.get("abuse_confidence", 0) for f in feeds if f.get("source") == "abuseipdb"), 0) or 0) / 10))
             live_score_boost += min(25, int(next((f.get("malicious_votes", 0) for f in feeds if f.get("source") == "virustotal"), 0) or 0))
-            vuln_count = len(next((f.get("vulns", []) for f in feeds if f.get("source") == "shodan"), []))
-            live_score_boost += min(20, vuln_count * 5)
 
         rep_score = min(100, int(h["score"]) + live_score_boost)
         reputation = ("malicious" if rep_score >= 80 else ("suspicious" if rep_score >= 55 else ("clean" if rep_score >= 30 else "unknown")))
@@ -576,7 +553,6 @@ def _ti_reload_config(self: ThreatIntelEngine) -> None:
     self.otx_key = _feed_env("OTX_API_KEY", "RISKINTEL_OTX_API_KEY")
     self.abuseipdb_key = _feed_env("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY")
     self.vt_key = _feed_env("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY")
-    self.shodan_key = _feed_env("SHODAN_API_KEY", "RISKINTEL_SHODAN_API_KEY")
     self.urlscan_key = _feed_env("URLSCAN_API_KEY", "RISKINTEL_URLSCAN_API_KEY")
 
 
@@ -584,7 +560,6 @@ def _ti_init(self: ThreatIntelEngine) -> None:
     self._rl_otx = RateLimiter(calls_per_minute=60)
     self._rl_abuseipdb = RateLimiter(calls_per_minute=30)
     self._rl_vt = RateLimiter(calls_per_minute=4)
-    self._rl_shodan = RateLimiter(calls_per_minute=18)
     self._rl_urlscan = RateLimiter(calls_per_minute=20)
     self._cache = TTLCache(maxsize=8192, ttl=6 * 3600)
     self._executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="threat-intel")
@@ -619,8 +594,7 @@ def _feed_configs(self: ThreatIntelEngine) -> Dict[str, Dict[str, Any]]:
         "alienvault_otx": {"name": "AlienVault OTX", "api_key": self.otx_key, "enabled": bool(self.otx_key), "health_check_url": "https://otx.alienvault.com/api/v1/user/me"},
         "abuseipdb": {"name": "AbuseIPDB", "api_key": self.abuseipdb_key, "enabled": bool(self.abuseipdb_key), "health_check_url": "https://api.abuseipdb.com/api/v2/check?ipAddress=1.1.1.1&maxAgeInDays=30"},
         "virustotal": {"name": "VirusTotal", "api_key": self.vt_key, "enabled": bool(self.vt_key), "health_check_url": "https://www.virustotal.com/api/v3/users/current"},
-        "shodan": {"name": "Shodan", "api_key": self.shodan_key, "enabled": bool(self.shodan_key), "health_check_url": f"https://api.shodan.io/api-info?key={self.shodan_key}" if self.shodan_key else ""},
-        "urlscan": {"name": "URLScan.io", "api_key": self.urlscan_key, "enabled": bool(self.urlscan_key), "health_check_url": "https://urlscan.io/user/"},
+        "urlscan": {"name": "URLScan.io", "api_key": self.urlscan_key, "enabled": bool(self.urlscan_key), "health_check_url": "https://urlscan.io/api/v1/user/quotas/"},
     }
 
 
@@ -694,7 +668,6 @@ def _ti_reload_config(self: ThreatIntelEngine) -> None:
     self.otx_key = _feed_env("OTX_API_KEY", "RISKINTEL_OTX_API_KEY")
     self.abuseipdb_key = _feed_env("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY")
     self.vt_key = _feed_env("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY")
-    self.shodan_key = _feed_env("SHODAN_API_KEY", "RISKINTEL_SHODAN_API_KEY")
     self.urlscan_key = _feed_env("URLSCAN_API_KEY", "RISKINTEL_URLSCAN_API_KEY")
 
 
@@ -702,7 +675,6 @@ def _ti_init(self: ThreatIntelEngine) -> None:
     self._rl_otx = RateLimiter(calls_per_minute=60)
     self._rl_abuseipdb = RateLimiter(calls_per_minute=30)
     self._rl_vt = RateLimiter(calls_per_minute=4)
-    self._rl_shodan = RateLimiter(calls_per_minute=18)
     self._rl_urlscan = RateLimiter(calls_per_minute=20)
     self._cache = TTLCache(maxsize=8192, ttl=6 * 3600)
     self._executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="threat-intel")
@@ -737,8 +709,7 @@ def _feed_configs(self: ThreatIntelEngine) -> Dict[str, Dict[str, Any]]:
         "alienvault_otx": {"name": "AlienVault OTX", "api_key": self.otx_key, "enabled": bool(self.otx_key), "health_check_url": "https://otx.alienvault.com/api/v1/user/me"},
         "abuseipdb": {"name": "AbuseIPDB", "api_key": self.abuseipdb_key, "enabled": bool(self.abuseipdb_key), "health_check_url": "https://api.abuseipdb.com/api/v2/check?ipAddress=1.1.1.1&maxAgeInDays=30"},
         "virustotal": {"name": "VirusTotal", "api_key": self.vt_key, "enabled": bool(self.vt_key), "health_check_url": "https://www.virustotal.com/api/v3/users/current"},
-        "shodan": {"name": "Shodan", "api_key": self.shodan_key, "enabled": bool(self.shodan_key), "health_check_url": f"https://api.shodan.io/api-info?key={self.shodan_key}" if self.shodan_key else ""},
-        "urlscan": {"name": "URLScan.io", "api_key": self.urlscan_key, "enabled": bool(self.urlscan_key), "health_check_url": "https://urlscan.io/user/"},
+        "urlscan": {"name": "URLScan.io", "api_key": self.urlscan_key, "enabled": bool(self.urlscan_key), "health_check_url": "https://urlscan.io/api/v1/user/quotas/"},
     }
 
 
@@ -812,7 +783,6 @@ def _ti_reload_config(self: ThreatIntelEngine) -> None:
     self.otx_key = _feed_env("OTX_API_KEY", "RISKINTEL_OTX_API_KEY")
     self.abuseipdb_key = _feed_env("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY")
     self.vt_key = _feed_env("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY")
-    self.shodan_key = _feed_env("SHODAN_API_KEY", "RISKINTEL_SHODAN_API_KEY")
     self.urlscan_key = _feed_env("URLSCAN_API_KEY", "RISKINTEL_URLSCAN_API_KEY")
 
 
@@ -820,7 +790,6 @@ def _ti_init(self: ThreatIntelEngine) -> None:
     self._rl_otx = RateLimiter(calls_per_minute=60)
     self._rl_abuseipdb = RateLimiter(calls_per_minute=30)
     self._rl_vt = RateLimiter(calls_per_minute=4)
-    self._rl_shodan = RateLimiter(calls_per_minute=18)
     self._rl_urlscan = RateLimiter(calls_per_minute=20)
     self._cache = TTLCache(maxsize=8192, ttl=6 * 3600)
     self._executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="threat-intel")
@@ -845,8 +814,6 @@ def _build_auth_headers(self: ThreatIntelEngine, feed_name: str, api_key: str) -
         return {"Key": api_key, "Accept": "application/json"}
     if feed_name == "virustotal":
         return {"x-apikey": api_key}
-    if feed_name == "shodan":
-        return {}
     if feed_name == "urlscan":
         return {"API-Key": api_key}
     return {}
@@ -872,17 +839,11 @@ def _feed_configs(self: ThreatIntelEngine) -> Dict[str, Dict[str, Any]]:
             "enabled": bool(self.vt_key),
             "health_check_url": "https://www.virustotal.com/api/v3/users/current",
         },
-        "shodan": {
-            "name": "Shodan",
-            "api_key": self.shodan_key,
-            "enabled": bool(self.shodan_key),
-            "health_check_url": f"https://api.shodan.io/api-info?key={self.shodan_key}" if self.shodan_key else "",
-        },
         "urlscan": {
             "name": "URLScan.io",
             "api_key": self.urlscan_key,
             "enabled": bool(self.urlscan_key),
-            "health_check_url": "https://urlscan.io/user/",
+            "health_check_url": "https://urlscan.io/api/v1/user/quotas/",
         },
     }
 
@@ -1092,14 +1053,12 @@ class ThreatIntelEngine:
         self.otx_key = os.getenv("RISKINTEL_OTX_API_KEY", "").strip()
         self.abuseipdb_key = os.getenv("RISKINTEL_ABUSEIPDB_API_KEY", "").strip()
         self.vt_key = os.getenv("RISKINTEL_VT_API_KEY", "").strip()
-        self.shodan_key = os.getenv("RISKINTEL_SHODAN_API_KEY", "").strip()
         self.urlscan_key = os.getenv("RISKINTEL_URLSCAN_API_KEY", "").strip()
 
         # Per-provider rate limiters
         self._rl_otx = RateLimiter(calls_per_minute=60)
         self._rl_abuseipdb = RateLimiter(calls_per_minute=30)
         self._rl_vt = RateLimiter(calls_per_minute=4)   # VT free = 4 req/min
-        self._rl_shodan = RateLimiter(calls_per_minute=18)
         self._rl_urlscan = RateLimiter(calls_per_minute=20)
 
         # Shared TTL cache: keyed by ioc_type:value:live
@@ -1130,7 +1089,7 @@ class ThreatIntelEngine:
     # ──────────────────────────────────────────
     @property
     def live_feeds_available(self) -> bool:
-        return bool(self.otx_key or self.abuseipdb_key or self.vt_key or self.shodan_key or self.urlscan_key)
+        return bool(self.otx_key or self.abuseipdb_key or self.vt_key or self.urlscan_key)
 
     @property
     def live_feed_status(self) -> Dict[str, Dict[str, bool]]:
@@ -1161,7 +1120,6 @@ class ThreatIntelEngine:
             "otx": {"name": "AlienVault OTX", "configured": bool(self.otx_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "abuseipdb": {"name": "AbuseIPDB", "configured": bool(self.abuseipdb_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "virustotal": {"name": "VirusTotal", "configured": bool(self.vt_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
-            "shodan": {"name": "Shodan", "configured": bool(self.shodan_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
             "urlscan": {"name": "URLScan.io", "configured": bool(self.urlscan_key), "reachable": None, "auth_valid": None, "latency_ms": None, "status_code": None, "error": None, "last_checked": now},
         }
         if probe:
@@ -1169,8 +1127,7 @@ class ThreatIntelEngine:
                 "otx": (bool(self.otx_key), "https://otx.alienvault.com/api/v1/user/me", {"X-OTX-API-KEY": self.otx_key, "User-Agent": "RiskIntel/3.0"}),
                 "abuseipdb": (bool(self.abuseipdb_key), "https://api.abuseipdb.com/api/v2/check?ipAddress=8.8.8.8&maxAgeInDays=30", {"Key": self.abuseipdb_key, "Accept": "application/json", "User-Agent": "RiskIntel/3.0"}),
                 "virustotal": (bool(self.vt_key), "https://www.virustotal.com/api/v3/users/current", {"x-apikey": self.vt_key, "User-Agent": "RiskIntel/3.0"}),
-                "shodan": (bool(self.shodan_key), f"https://api.shodan.io/api-info?key={self.shodan_key}", {"User-Agent": "RiskIntel/3.0"}),
-                "urlscan": (bool(self.urlscan_key), "https://urlscan.io/user/", {"API-Key": self.urlscan_key, "User-Agent": "RiskIntel/3.0"}),
+                "urlscan": (bool(self.urlscan_key), "https://urlscan.io/api/v1/user/quotas/", {"API-Key": self.urlscan_key, "User-Agent": "RiskIntel/3.0"}),
             }
             futures = {}
             with ThreadPoolExecutor(max_workers=5) as pool:
@@ -1373,22 +1330,6 @@ class ThreatIntelEngine:
         except Exception:
             return {"enabled": True, "listed": False, "malicious_votes": 0, "source": "virustotal", "error": True}
 
-    def _lookup_shodan(self, ioc_type: str, value: str) -> Dict[str, Any]:
-        if ioc_type != "ip" or not self.shodan_key:
-            return {"enabled": bool(self.shodan_key and ioc_type == "ip"), "listed": False, "source": "shodan"}
-        try:
-            self._rl_shodan.acquire()
-            data = self._http_json(f"https://api.shodan.io/shodan/host/{quote(value)}?key={self.shodan_key}", {"User-Agent": "RiskIntel/3.0"})
-            ports = data.get("ports", [])
-            vulns = list((data.get("vulns") or {}).keys())[:10]
-            org = data.get("org", "")
-            return {
-                "enabled": True, "listed": bool(vulns), "ports": ports[:20],
-                "vulns": vulns, "org": org, "country": data.get("country_name"), "source": "shodan",
-            }
-        except Exception:
-            return {"enabled": True, "listed": False, "source": "shodan", "error": True}
-
     def _lookup_urlscan(self, ioc_type: str, value: str) -> Dict[str, Any]:
         if ioc_type not in {"url", "domain"} or not self.urlscan_key:
             return {"enabled": bool(self.urlscan_key and ioc_type in {"url", "domain"}), "listed": False, "source": "urlscan"}
@@ -1426,7 +1367,6 @@ class ThreatIntelEngine:
                 (self._lookup_otx, ioc.ioc_type, ioc.value),
                 (self._lookup_abuseipdb, ioc.ioc_type, ioc.value),
                 (self._lookup_virustotal, ioc.ioc_type, ioc.value),
-                (self._lookup_shodan, ioc.ioc_type, ioc.value),
                 (self._lookup_urlscan, ioc.ioc_type, ioc.value),
             ]
             futures = {self._executor.submit(fn, t, v): fn.__name__ for fn, t, v in lookup_fns}
@@ -1442,8 +1382,6 @@ class ThreatIntelEngine:
             live_score_boost += min(40, listed * 12)
             live_score_boost += min(20, int((next((f.get("abuse_confidence", 0) for f in feeds if f.get("source") == "abuseipdb"), 0) or 0) / 10))
             live_score_boost += min(25, int(next((f.get("malicious_votes", 0) for f in feeds if f.get("source") == "virustotal"), 0) or 0))
-            vuln_count = len(next((f.get("vulns", []) for f in feeds if f.get("source") == "shodan"), []))
-            live_score_boost += min(20, vuln_count * 5)
 
         rep_score = min(100, int(h["score"]) + live_score_boost)
         reputation = ("malicious" if rep_score >= 80 else ("suspicious" if rep_score >= 55 else ("clean" if rep_score >= 30 else "unknown")))

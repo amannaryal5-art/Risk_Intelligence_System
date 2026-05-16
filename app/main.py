@@ -173,7 +173,6 @@ def _sync_feed_env_aliases() -> None:
         "OTX_API_KEY": "RISKINTEL_OTX_API_KEY",
         "ABUSEIPDB_API_KEY": "RISKINTEL_ABUSEIPDB_API_KEY",
         "VIRUSTOTAL_API_KEY": "RISKINTEL_VT_API_KEY",
-        "SHODAN_API_KEY": "RISKINTEL_SHODAN_API_KEY",
         "URLSCAN_API_KEY": "RISKINTEL_URLSCAN_API_KEY",
     }
     for alias, canonical in alias_pairs.items():
@@ -243,7 +242,6 @@ def _reload_feed_keys() -> None:
     threat_intel_engine.otx_key = _feed_env("OTX_API_KEY", "RISKINTEL_OTX_API_KEY")
     threat_intel_engine.abuseipdb_key = _feed_env("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY")
     threat_intel_engine.vt_key = _feed_env("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY")
-    threat_intel_engine.shodan_key = _feed_env("SHODAN_API_KEY", "RISKINTEL_SHODAN_API_KEY")
     threat_intel_engine.urlscan_key = _feed_env("URLSCAN_API_KEY", "RISKINTEL_URLSCAN_API_KEY")
 
 
@@ -259,8 +257,7 @@ def _build_feed_configs() -> Dict[str, Dict[str, Any]]:
         "alienvault_otx": {"name": "AlienVault OTX", "api_key": threat_intel_engine.otx_key, "enabled": bool(threat_intel_engine.otx_key), "health_check_url": "https://otx.alienvault.com/api/v1/user/me"},
         "abuseipdb": {"name": "AbuseIPDB", "api_key": threat_intel_engine.abuseipdb_key, "enabled": bool(threat_intel_engine.abuseipdb_key), "health_check_url": "https://api.abuseipdb.com/api/v2/check?ipAddress=1.1.1.1&maxAgeInDays=30"},
         "virustotal": {"name": "VirusTotal", "api_key": threat_intel_engine.vt_key, "enabled": bool(threat_intel_engine.vt_key), "health_check_url": "https://www.virustotal.com/api/v3/users/current"},
-        "shodan": {"name": "Shodan", "api_key": threat_intel_engine.shodan_key, "enabled": bool(threat_intel_engine.shodan_key), "health_check_url": f"https://api.shodan.io/api-info?key={threat_intel_engine.shodan_key}" if threat_intel_engine.shodan_key else ""},
-        "urlscan": {"name": "URLScan.io", "api_key": threat_intel_engine.urlscan_key, "enabled": bool(threat_intel_engine.urlscan_key), "health_check_url": "https://urlscan.io/user/"},
+        "urlscan": {"name": "URLScan.io", "api_key": threat_intel_engine.urlscan_key, "enabled": bool(threat_intel_engine.urlscan_key), "health_check_url": "https://urlscan.io/api/v1/user/quotas/"},
     }
 
 
