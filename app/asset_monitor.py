@@ -26,6 +26,14 @@ DEFAULT_DB_DIR = (
 )
 DB_PATH = Path(os.getenv("RISKINTEL_DATA_DIR", str(DEFAULT_DB_DIR))) / "aria.db"
 
+
+def _env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 class AssetDB:
@@ -277,7 +285,7 @@ class AssetDB:
 # ─── Threat Scanner ────────────────────────────────────────────────────────────
 
 async def _check_virustotal(target: str, asset_type: str) -> Dict:
-    api_key = os.getenv("VIRUSTOTAL_API_KEY", "")
+    api_key = _env_value("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY")
     if not api_key:
         return {"source": "virustotal", "status": "no_api_key"}
     try:
@@ -308,7 +316,7 @@ async def _check_virustotal(target: str, asset_type: str) -> Dict:
 
 
 async def _check_abuseipdb(ip: str) -> Dict:
-    api_key = os.getenv("ABUSEIPDB_API_KEY", "")
+    api_key = _env_value("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY")
     if not api_key:
         return {"source": "abuseipdb", "status": "no_api_key"}
     try:
@@ -334,7 +342,7 @@ async def _check_abuseipdb(ip: str) -> Dict:
 
 
 async def _check_otx(target: str, asset_type: str) -> Dict:
-    api_key = os.getenv("OTX_API_KEY", "")
+    api_key = _env_value("OTX_API_KEY", "RISKINTEL_OTX_API_KEY")
     if not api_key:
         return {"source": "otx", "status": "no_api_key"}
     try:
