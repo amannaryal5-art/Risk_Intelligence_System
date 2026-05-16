@@ -10,6 +10,8 @@ venv/
 dist/
 build/
 *.js.map
+!frontend/dist/
+!frontend/dist/**
 
 # Environment variables
 .env 
