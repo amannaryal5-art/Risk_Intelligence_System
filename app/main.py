@@ -18,7 +18,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -208,6 +208,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/")
+async def root():
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 AUTH_ENFORCED = os.getenv("RISKINTEL_ENFORCE_AUTH", "true").lower() == "true"
 DEFAULT_API_KEY = os.getenv("RISKINTEL_DEFAULT_API_KEY", "").strip()
@@ -1140,3 +1145,183 @@ async def list_audits(limit: int = 100, user: UserContext = Depends(get_current_
     rows = case_store.list_audits(limit=limit)
     case_store.audit(user.username, user.role, "list_audit_logs", "audit", meta={"count": len(rows)})
     return {"count": len(rows), "results": rows}
+
+import asyncio as _asyncio
+import sys as _sys
+import os as _os
+from pathlib import Path as _Path
+from pydantic import BaseModel as _BaseModel
+from typing import List as _List, Optional as _Optional
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+
+from asset_monitor import db as _db, run_monitoring_cycle, run_daily_report, scan_asset as _scan_asset
+from ai_engine import chat as _ai_chat, summarize_asset as _summarize_asset
+
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler as _Scheduler
+    _scheduler = _Scheduler()
+    _SCHEDULER_OK = True
+except ImportError:
+    _SCHEDULER_OK = False
+    _scheduler = None
+
+
+@app.on_event("startup")
+async def _aria_startup():
+    if _SCHEDULER_OK and _scheduler:
+        _scheduler.add_job(
+            run_monitoring_cycle, "interval", minutes=30, id="aria_monitor"
+        )
+        _scheduler.add_job(
+            run_daily_report, "cron", hour=8, minute=0, id="aria_daily_report"
+        )
+        _scheduler.start()
+        import logging
+        logging.getLogger("aria").info("ARIA scheduler started")
+        logging.getLogger("uvicorn.error").info("ARIA scheduler started")
+    _asyncio.create_task(run_monitoring_cycle())
+
+
+@app.on_event("shutdown")
+async def _aria_shutdown():
+    if _SCHEDULER_OK and _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+
+
+class _AddAsset(_BaseModel):
+    name: str
+    type: str
+    value: str
+    scan_interval_hours: int = 6
+
+
+class _ChatMessage(_BaseModel):
+    role: str
+    content: str
+
+
+class _ChatRequest(_BaseModel):
+    messages: _List[_ChatMessage]
+
+
+@app.get("/api/aria/assets")
+async def aria_get_assets():
+    return _db.get_assets()
+
+
+@app.post("/api/aria/assets")
+async def aria_add_asset(body: _AddAsset):
+    if body.type not in ("domain", "ip", "url", "email"):
+        raise HTTPException(400, "type must be domain | ip | url | email")
+    pid = _db.add_asset(body.name, body.type, body.value, body.scan_interval_hours)
+    asset = _db.get_asset(pid)
+    if asset:
+        _asyncio.create_task(_background_scan(pid, asset))
+    return {"id": pid, "status": "added", "message": "Asset added - scanning now"}
+
+
+@app.delete("/api/aria/assets/{aid}")
+async def aria_delete_asset(aid: int):
+    _db.delete_asset(aid)
+    return {"status": "removed"}
+
+
+@app.post("/api/aria/assets/{aid}/scan")
+async def aria_scan_now(aid: int):
+    asset = _db.get_asset(aid)
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+    _asyncio.create_task(_background_scan(aid, asset))
+    return {"status": "scanning", "message": "Scan started - results in ~15 seconds"}
+
+
+@app.get("/api/aria/assets/{aid}/history")
+async def aria_asset_history(aid: int):
+    return _db.get_asset_history(aid)
+
+
+@app.get("/api/aria/assets/{aid}/summary")
+async def aria_asset_summary(aid: int):
+    asset = _db.get_asset(aid)
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+    history = _db.get_asset_history(aid)
+    summary = await _summarize_asset(asset["value"], history)
+    return {"summary": summary}
+
+
+async def _background_scan(aid: int, asset: dict):
+    try:
+        ai_result, raw_data = await _scan_asset(asset)
+        _db.save_scan(aid, ai_result, raw_data)
+        _db.mark_scanned(aid)
+        if ai_result.get("risk_level") in ("Critical", "High"):
+            findings = ai_result.get("key_findings", [])
+            title = f"{ai_result['risk_level']} risk on {asset['value']}"
+            message = ai_result.get("summary", "")
+            if findings:
+                message += " | " + "; ".join(findings[:3])
+            _db.add_alert(aid, asset["value"], ai_result["risk_level"], title, message)
+    except Exception as e:
+        import logging
+        logging.getLogger("aria").error(f"Background scan failed for {asset['value']}: {e}")
+
+
+@app.post("/api/aria/chat")
+async def aria_chat(body: _ChatRequest):
+    context = _db.build_chat_context()
+    messages = [{"role": m.role, "content": m.content} for m in body.messages]
+    reply = await _ai_chat(messages, context)
+    return {"reply": reply}
+
+
+@app.get("/api/aria/stats")
+async def aria_stats():
+    assets = _db.get_assets()
+    return {
+        "total": len(assets),
+        "critical": sum(1 for a in assets if a.get("last_risk_level") == "Critical"),
+        "high": sum(1 for a in assets if a.get("last_risk_level") == "High"),
+        "medium": sum(1 for a in assets if a.get("last_risk_level") == "Medium"),
+        "low": sum(1 for a in assets if a.get("last_risk_level") == "Low"),
+        "clean": sum(1 for a in assets if a.get("last_risk_level") == "Clean"),
+        "unknown": sum(1 for a in assets if not a.get("last_risk_level")),
+        "unseen_alerts": _db.unseen_count(),
+    }
+
+
+@app.get("/api/aria/alerts")
+async def aria_get_alerts():
+    return _db.get_alerts()
+
+
+@app.post("/api/aria/alerts/{aid}/seen")
+async def aria_mark_seen(aid: int):
+    _db.mark_seen(aid)
+    return {"status": "ok"}
+
+
+@app.post("/api/aria/alerts/seen-all")
+async def aria_mark_all_seen():
+    _db.mark_all_seen()
+    return {"status": "ok"}
+
+
+@app.get("/api/aria/reports")
+async def aria_get_reports():
+    return _db.get_reports()
+
+
+@app.get("/api/aria/reports/{rid}")
+async def aria_get_report(rid: int):
+    report = _db.get_report(rid)
+    if not report:
+        raise HTTPException(404, "Report not found")
+    return report
+
+
+@app.post("/api/aria/reports/generate")
+async def aria_generate_report():
+    rid = await run_daily_report()
+    return {"id": rid, "status": "generated"}

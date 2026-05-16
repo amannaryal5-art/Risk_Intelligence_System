@@ -1,1716 +1,487 @@
-'use strict';
+/* ARIA — Frontend App */
 
-let lastAnalysis = null;
-let lastWebTrace = null;
-let lastFusion = null;
-let currentMode = 'text';
-let currentCase = null;
-let activeResultTab = 'overview';
-let feedsSocket = null;
-let feedsPollTimer = null;
+const API = '';
+let allAssets    = [];
+let chatHistory  = [];   // {role, content}
+let sidebarOpen  = true;
+let currentReport = null;
 
-function getAnalyzeButtonLabel(mode = currentMode) {
-  return mode === 'website' ? 'Full Scan' : 'Analyze';
-}
-
-const STORAGE_KEY = 'crie_recent_v3';
-const FEED_RESULTS_KEY = 'crie_feed_results_v1';
-const TIMEOUTS = {
-  default: 28000,
-  website: 240000,
-  fusion: 240000,
-  file: 20000,
-  ioc: 12000,
-};
-
-const FEED_META = {
-  alienvault_otx: {
-    key: 'alienvault_otx',
-    slug: 'otx',
-    icon: '◉',
-    accent: '#f97316',
-    title: 'AlienVault OTX',
-    description: 'Open threat intelligence community. Detects malicious IPs, domains, file hashes, and URLs via 20M+ IOCs.',
-    capabilities: ['IP reputation', 'Domain lookup', 'Hash analysis', 'Bulk queries'],
-    quotaLabel: 'Free tier',
-  },
-  abuseipdb: {
-    key: 'abuseipdb',
-    slug: 'abuseipdb',
-    icon: '◆',
-    accent: '#ef4444',
-    title: 'AbuseIPDB',
-    description: 'IP address abuse reporting. Checks IPs against a database of reported malicious activity.',
-    capabilities: ['IP reputation', 'Reporter trends', 'Confidence scoring', 'Enrichment'],
-    quotaLabel: 'Free tier',
-  },
-  virustotal: {
-    key: 'virustotal',
-    slug: 'virustotal',
-    icon: '▣',
-    accent: '#3b82f6',
-    title: 'VirusTotal',
-    description: 'Multi-engine malware scanner. Aggregates 70+ antivirus engines and URL scanners.',
-    capabilities: ['Hash analysis', 'URL scan', 'Domain intel', 'Multi-engine verdict'],
-    quotaLabel: 'Free tier',
-  },
-  shodan: {
-    key: 'shodan',
-    slug: 'shodan',
-    icon: '⬡',
-    accent: '#8b5cf6',
-    title: 'Shodan',
-    description: 'Internet exposure search. Identifies open services, banners, and exposed hosts.',
-    capabilities: ['Banner intel', 'Port exposure', 'Host lookup', 'Asset profiling'],
-    quotaLabel: 'Premium',
-  },
-  urlscan: {
-    key: 'urlscan',
-    slug: 'urlscan',
-    icon: '◌',
-    accent: '#06b6d4',
-    title: 'URLScan.io',
-    description: 'URL detonation and page capture. Records loaded resources, redirects, and visual snapshots.',
-    capabilities: ['URL detonation', 'Resource graph', 'Redirect trace', 'Page screenshot'],
-    quotaLabel: 'Free tier',
-  },
-};
-
-const DEFAULT_FEED_ORDER = ['alienvault_otx', 'abuseipdb', 'virustotal'];
-const resultTabMap = {
-  Overview: 'overview',
-  'Links & Domains': 'links',
-  'IOC Intel': 'ioc',
-  Recommendations: 'recommendations',
-};
-
-document.querySelectorAll('.nav-link').forEach((link) => {
-  link.addEventListener('click', (event) => {
-    if (!link.dataset.tab) return;
-    event.preventDefault();
-    activateTab(link.dataset.tab);
-  });
+// ── Boot ────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  loadAll();
+  setInterval(loadAll, 60_000);   // refresh everything every 60s
 });
 
-document.querySelectorAll('.detail-tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    switchResultTab(resultTabMap[tab.textContent.trim()] || 'overview');
-  });
-});
-
-const textInput = document.getElementById('textInput');
-if (textInput) {
-  textInput.addEventListener('input', () => {
-    document.getElementById('charCount').textContent = textInput.value.length.toLocaleString();
-    detectQuickIocs(textInput.value);
-  });
+async function loadAll() {
+  await Promise.all([loadAssets(), loadAlerts(), loadStats(), loadReports()]);
 }
 
-document.getElementById('clearInputBtn')?.addEventListener('click', clearAll);
-
-document.getElementById('flagsToggle')?.addEventListener('click', () => {
-  const body = document.getElementById('flagsBody');
-  const chevron = document.getElementById('flagsChevron');
-  if (!body || !chevron) return;
-  const collapsed = body.classList.toggle('hidden');
-  chevron.textContent = collapsed ? '+' : '-';
-});
-
-const fileDrop = document.getElementById('fileDrop');
-const fileInput = document.getElementById('fileInput');
-if (fileDrop && fileInput) {
-  fileDrop.addEventListener('dragover', (event) => {
-    event.preventDefault();
-    fileDrop.style.borderColor = 'var(--accent)';
-  });
-  fileDrop.addEventListener('dragleave', () => {
-    fileDrop.style.borderColor = '';
-  });
-  fileDrop.addEventListener('drop', (event) => {
-    event.preventDefault();
-    fileDrop.style.borderColor = '';
-    if (event.dataTransfer.files[0]) {
-      fileInput.files = event.dataTransfer.files;
-      showFileInfo(event.dataTransfer.files[0]);
-    }
-  });
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) showFileInfo(fileInput.files[0]);
-  });
+// ── Assets ───────────────────────────────────────────────────────────────────
+async function loadAssets() {
+  try {
+    const res = await fetch(`${API}/api/aria/assets`);
+    allAssets = await res.json();
+    renderSidebarAssets();
+    renderDashboard();
+  } catch(e) { console.error('loadAssets:', e) }
 }
 
-function activateTab(tab) {
-  document.querySelectorAll('.nav-link').forEach((item) => item.classList.toggle('active', item.dataset.tab === tab));
-  document.querySelectorAll('.tab-content').forEach((item) => item.classList.toggle('active', item.id === `tab-${tab}`));
-  if (tab === 'feeds') refreshFeeds(false);
-  if (tab === 'cases') loadCases();
+async function addAsset() {
+  const name  = qs('#assetName').value.trim();
+  const type  = qs('#assetType').value;
+  const value = qs('#assetValue').value.trim();
+  if (!value) return flash('Enter an asset value');
+
+  const btn = qs('.btn-add-asset');
+  btn.disabled = true;
+  btn.textContent = '↻ Adding…';
+
+  try {
+    const res = await fetch(`${API}/api/aria/assets`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: name || value, type, value }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    qs('#assetName').value = '';
+    qs('#assetValue').value = '';
+    await loadAssets();
+    setTimeout(loadAssets, 8000);
+    setTimeout(loadAssets, 20000);
+  } catch(e) {
+    flash('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Monitor this';
+  }
 }
 
-function setMode(mode) {
-  currentMode = mode;
-  document.getElementById('modeText')?.classList.toggle('active', mode === 'text');
-  document.getElementById('modeWeb')?.classList.toggle('active', mode === 'website');
-  document.getElementById('modeFile')?.classList.toggle('active', mode === 'file');
-  document.getElementById('textSection')?.classList.toggle('hidden', mode !== 'text');
-  document.getElementById('webSection')?.classList.toggle('hidden', mode !== 'website');
-  document.getElementById('fileSection')?.classList.toggle('hidden', mode !== 'file');
-  const analyzeLabel = document.querySelector('#analyzeBtn .btn-label');
-  if (analyzeLabel) analyzeLabel.textContent = getAnalyzeButtonLabel(mode);
+async function deleteAsset(id, e) {
+  e.stopPropagation();
+  if (!confirm('Stop monitoring this asset?')) return;
+  await fetch(`${API}/api/aria/assets/${id}`, { method: 'DELETE' });
+  await loadAssets();
 }
-window.setMode = setMode;
 
-function switchResultTab(name) {
-  activeResultTab = name;
-  document.querySelectorAll('.detail-tab').forEach((tab) => {
-    tab.classList.toggle('active', (resultTabMap[tab.textContent.trim()] || 'overview') === name);
-  });
-  document.querySelectorAll('.result-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `panel-${name}`));
+async function scanNow(id, e) {
+  e && e.stopPropagation();
+  await fetch(`${API}/api/aria/assets/${id}/scan`, { method: 'POST' });
+  setTimeout(loadAssets, 8000);
+  setTimeout(loadAssets, 20000);
 }
-window.switchResultTab = switchResultTab;
 
-function detectQuickIocs(text) {
-  const panel = document.getElementById('quickExtract');
-  const list = document.getElementById('quickIocList');
-  if (!panel || !list) return;
-  if (!text.trim()) {
-    panel.classList.add('hidden');
-    list.innerHTML = '';
+async function runAllScans() {
+  const btn = qs('.btn-secondary');
+  btn.disabled = true; btn.textContent = '↻ Scanning…';
+  await Promise.all(allAssets.map(a => fetch(`${API}/api/aria/assets/${a.id}/scan`, {method:'POST'})));
+  setTimeout(async () => { await loadAssets(); btn.disabled=false; btn.textContent='↻ Scan all now'; }, 12000);
+}
+
+// ── Sidebar render ────────────────────────────────────────────────────────────
+function renderSidebarAssets() {
+  const el = qs('#assetList');
+  if (!allAssets.length) {
+    el.innerHTML = '<div class="asset-empty">No assets yet.<br/>Add one below.</div>';
     return;
   }
-  const items = [];
-  const urlPat = /(?:https?:\/\/|www\.)[^\s<>'"()]+/gi;
-  const ipPat = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
-  const hashPat = /\b[a-fA-F0-9]{32,64}\b/g;
-  (text.match(urlPat) || []).slice(0, 3).forEach((value) => items.push({ label: 'URL', value }));
-  (text.match(ipPat) || []).slice(0, 3).forEach((value) => items.push({ label: 'IP', value }));
-  (text.match(hashPat) || []).slice(0, 2).forEach((value) => items.push({ label: 'HASH', value: `${value.slice(0, 18)}...` }));
-  panel.classList.toggle('hidden', !items.length);
-  list.innerHTML = items.map((item) => `<span class="quick-ioc-chip">${esc(item.label)} ${esc(item.value)}</span>`).join('');
+  el.innerHTML = allAssets.map(a => {
+    const level = a.last_risk_level || 'Unknown';
+    const dot   = riskColor(level);
+    return `
+      <div class="asset-row" onclick="openAssetDetail(${a.id})">
+        <div class="asset-risk-dot" style="background:${dot};box-shadow:0 0 5px ${dot}"></div>
+        <div class="asset-row-info">
+          <div class="asset-row-name">${esc(a.name || a.value)}</div>
+          <div class="asset-row-level">${level} · ${a.type}</div>
+        </div>
+        <button class="asset-row-del" onclick="deleteAsset(${a.id},event)" title="Remove">✕</button>
+      </div>`;
+  }).join('');
 }
 
-function showFileInfo(file) {
-  document.getElementById('fileInfo')?.classList.remove('hidden');
-  document.getElementById('fileName').textContent = file.name;
-  document.getElementById('fileSize').textContent = formatBytes(file.size);
-}
-
-async function checkHealth() {
-  const dot = document.getElementById('systemDot');
-  const status = document.getElementById('systemStatus');
-  const badge = document.getElementById('latencyBadge');
-  try {
-    const start = performance.now();
-    const data = await fetchJson('/api/v1/health', {}, 6000);
-    const latency = Math.round(performance.now() - start);
-    if (dot) dot.className = 'status-dot ok';
-    if (status) status.textContent = 'Online';
-    if (badge) badge.textContent = `${latency} ms`;
-    document.getElementById('footerUser').textContent = `AUTH:${data.auth_enforced ? 'ON' : 'OFF'} · FEEDS:${data.live_feeds_default ? 'LIVE' : 'HEURISTIC'}`;
-  } catch {
-    if (dot) dot.className = 'status-dot error';
-    if (status) status.textContent = 'Offline';
-    if (badge) badge.textContent = '-- ms';
+// ── Dashboard render ──────────────────────────────────────────────────────────
+function renderDashboard() {
+  const grid = qs('#assetCards');
+  if (!allAssets.length) {
+    grid.innerHTML = '<div class="dash-empty">Add assets in the sidebar to start monitoring.</div>';
+    return;
   }
+  grid.innerHTML = allAssets.map(a => {
+    const level = a.last_risk_level || 'Unknown';
+    const score = a.last_risk_score || 0;
+    const color = riskColor(level);
+    const time  = a.last_scanned_at ? timeAgo(a.last_scanned_at) : 'pending…';
+    return `
+      <div class="asset-card risk-${level}" onclick="openAssetDetail(${a.id})">
+        <div class="card-top">
+          <div class="card-meta">
+            <div class="card-type">${a.type}</div>
+            <div class="card-name">${esc(a.name || a.value)}</div>
+            <div class="card-value">${esc(a.value)}</div>
+          </div>
+          <div class="risk-pill ${level}">${level}</div>
+        </div>
+        <div class="score-bar-wrap">
+          <div class="score-bar">
+            <div class="score-fill" style="width:${score}%;background:${color}"></div>
+          </div>
+        </div>
+        <div class="card-summary">${esc(a.last_summary || 'Scanning…')}</div>
+        <div class="card-footer">
+          <span class="card-time">${time}</span>
+          <div class="card-actions-row">
+            <button class="btn-card" onclick="scanNow(${a.id},event)">↻ Scan</button>
+            <button class="btn-card" onclick="openAssetDetail(${a.id})">Details</button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
-async function fetchJson(url, options = {}, timeoutMs = TIMEOUTS.default) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+// ── Stats ─────────────────────────────────────────────────────────────────────
+async function loadStats() {
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    console.log('[DEBUG] Response status:', response.status, 'for', url);
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    const payload = contentType.includes('application/json') ? await response.json() : { detail: await response.text() };
-    if (!response.ok) {
-      const detail = typeof payload?.detail === 'string' ? payload.detail : JSON.stringify(payload?.detail || payload);
-      throw new Error(detail || `HTTP ${response.status}`);
+    const s = await fetch(`${API}/api/aria/stats`).then(r => r.json());
+    setText('#statTotal',    s.total);
+    setText('#statCritical', s.critical + s.high);
+    setText('#statHigh',     s.high);
+    setText('#statClean',    s.clean);
+    const badge = qs('#alertBadge');
+    if (s.unseen_alerts > 0) {
+      badge.textContent = s.unseen_alerts;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
     }
-    return payload;
-  } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s`);
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  } catch(e) {}
+}
+
+// ── Asset Detail Modal ────────────────────────────────────────────────────────
+async function openAssetDetail(id) {
+  const asset = allAssets.find(a => a.id === id);
+  if (!asset) return;
+
+  qs('#modalInner').innerHTML = `<div style="color:var(--text3);font-size:13px;padding:20px 0">Loading history…</div>`;
+  qs('#modalBg').classList.remove('hidden');
+
+  try {
+    const [history, summaryRes] = await Promise.all([
+      fetch(`${API}/api/aria/assets/${id}/history`).then(r => r.json()),
+      fetch(`${API}/api/aria/assets/${id}/summary`).then(r => r.json()),
+    ]);
+
+    const level = asset.last_risk_level || 'Unknown';
+    const findings = JSON.parse(history[0]?.key_findings || '[]');
+    const recs     = JSON.parse(history[0]?.recommendations || '[]');
+    const indics   = JSON.parse(history[0]?.threat_indicators || '[]');
+
+    qs('#modalInner').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px">
+        <div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono);margin-bottom:4px">${asset.type.toUpperCase()}</div>
+          <div style="font-size:18px;font-weight:600;font-family:var(--font-head)">${esc(asset.name||asset.value)}</div>
+          <div style="font-size:12px;color:var(--text3);font-family:var(--font-mono)">${esc(asset.value)}</div>
+        </div>
+        <div class="risk-pill ${level}" style="font-size:13px;padding:6px 14px">${level}</div>
+      </div>
+
+      <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:14px;margin-bottom:16px;font-size:13px;color:var(--text2);line-height:1.7">
+        ${esc(summaryRes.summary || 'No summary available.')}
+      </div>
+
+      ${findings.length ? `
+        <div style="margin-bottom:16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Key Findings</div>
+          ${findings.map(f => `<div style="font-size:12px;color:var(--text2);padding:4px 0;border-bottom:1px solid var(--border)">• ${esc(f)}</div>`).join('')}
+        </div>` : ''}
+
+      ${recs.length ? `
+        <div style="margin-bottom:16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Recommendations</div>
+          ${recs.map(r => `<div style="font-size:12px;color:var(--green);padding:4px 0">→ ${esc(r)}</div>`).join('')}
+        </div>` : ''}
+
+      ${indics.length ? `
+        <div style="margin-bottom:16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Threat Indicators</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${indics.map(i => `<span style="background:var(--red-bg);color:var(--red);border-radius:99px;padding:2px 10px;font-size:11px">${esc(i)}</span>`).join('')}
+          </div>
+        </div>` : ''}
+
+      <div>
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Scan History (last 30)</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="color:var(--text3)">
+              <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Risk</th>
+              <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Score</th>
+              <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${history.map(h => `
+              <tr>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border);color:${riskColor(h.risk_level)}">${h.risk_level||'—'}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-family:var(--font-mono)">${h.risk_score??'—'}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text3);font-family:var(--font-mono)">${timeAgo(h.scanned_at)}</td>
+              </tr>`).join('') || '<tr><td colspan="3" style="padding:12px 8px;color:var(--text3)">No history yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    qs('#modalInner').innerHTML = `<div style="color:var(--red)">Failed to load details.</div>`;
   }
 }
 
-function post(url, body, timeout) {
-  return fetchJson(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, timeout);
+function closeModal() { qs('#modalBg').classList.add('hidden'); }
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+async function sendChat() {
+  const inp = qs('#chatInput');
+  const text = inp.value.trim();
+  if (!text) return;
+
+  inp.value = '';
+  inp.style.height = 'auto';
+  appendMsg('user', text);
+  chatHistory.push({ role: 'user', content: text });
+
+  const thinkId = appendThinking();
+  qs('#btnSend').disabled = true;
+
+  try {
+    const res = await fetch(`${API}/api/aria/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: chatHistory }),
+    });
+    const data = await res.json();
+    const reply = data.reply || 'No response.';
+    removeThinking(thinkId);
+    appendMsg('ai', reply);
+    chatHistory.push({ role: 'assistant', content: reply });
+  } catch(e) {
+    removeThinking(thinkId);
+    appendMsg('ai', '⚠️ Connection error. Check that the backend is running.');
+  } finally {
+    qs('#btnSend').disabled = false;
+    inp.focus();
+  }
+}
+
+function sendQuick(text) {
+  qs('#chatInput').value = text;
+  sendChat();
+}
+
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+function appendMsg(role, content) {
+  const wrap = qs('#chatMessages');
+  const div  = document.createElement('div');
+  div.className = `msg ${role}`;
+  const avatar = role === 'ai' ? 'A' : 'U';
+  div.innerHTML = `
+    <div class="msg-avatar">${avatar}</div>
+    <div class="msg-bubble">${role==='ai' ? markdownToHtml(content) : `<p>${esc(content)}</p>`}</div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return div;
+}
+
+function appendThinking() {
+  const wrap = qs('#chatMessages');
+  const id   = 'thinking-' + Date.now();
+  const div  = document.createElement('div');
+  div.id = id;
+  div.className = 'msg ai thinking';
+  div.innerHTML = `<div class="msg-avatar">A</div><div class="msg-bubble"><div class="thinking-dots"><span></span><span></span><span></span></div></div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return id;
+}
+
+function removeThinking(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+// ── Alerts ────────────────────────────────────────────────────────────────────
+async function loadAlerts() {
+  try {
+    const alerts = await fetch(`${API}/api/aria/alerts`).then(r => r.json());
+    renderAlerts(alerts);
+  } catch(e) {}
+}
+
+function renderAlerts(alerts) {
+  const el = qs('#alertsList');
+  if (!alerts.length) {
+    el.innerHTML = '<div class="dash-empty">No alerts yet. ARIA will notify you automatically when threats are detected.</div>';
+    return;
+  }
+  el.innerHTML = alerts.map(a => {
+    const icon = a.risk_level === 'Critical' ? '🔴' : a.risk_level === 'High' ? '🟠' : '🟡';
+    return `
+      <div class="alert-card ${a.seen ? 'seen' : ''}" id="alert-${a.id}">
+        <div class="alert-icon">${icon}</div>
+        <div class="alert-body">
+          <div class="alert-title">${esc(a.title || 'Threat detected')}</div>
+          <div class="alert-msg">${esc(a.message || '')}</div>
+          <div class="alert-meta">
+            <span class="alert-level-pill risk-pill ${a.risk_level}">${a.risk_level}</span>
+            <span class="alert-time">${timeAgo(a.created_at)}</span>
+          </div>
+        </div>
+        ${!a.seen ? `<button class="btn-seen" onclick="markSeen(${a.id})">Seen</button>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function markSeen(id) {
+  await fetch(`${API}/api/aria/alerts/${id}/seen`, { method: 'POST' });
+  await loadAlerts();
+  loadStats();
+}
+
+async function markAllSeen() {
+  await fetch(`${API}/api/aria/alerts/seen-all`, { method: 'POST' });
+  await loadAlerts();
+  loadStats();
+}
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+async function loadReports() {
+  try {
+    const reports = await fetch(`${API}/api/aria/reports`).then(r => r.json());
+    renderReportsList(reports);
+  } catch(e) {}
+}
+
+function renderReportsList(reports) {
+  const el = qs('#reportsList');
+  if (!reports.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:12px">No reports yet. Click "Generate now".</div>';
+    return;
+  }
+  el.innerHTML = reports.map(r => `
+    <div class="report-item ${currentReport === r.id ? 'active':''}" onclick="openReport(${r.id})">
+      <div class="report-item-title">${esc(r.title)}</div>
+      <div class="report-item-date">${timeAgo(r.generated_at)}</div>
+    </div>`).join('');
+}
+
+async function openReport(id) {
+  currentReport = id;
+  qs('#reportContent').innerHTML = '<div style="color:var(--text3);font-size:13px">Loading…</div>';
+  try {
+    const r = await fetch(`${API}/api/aria/reports/${id}`).then(res => res.json());
+    qs('#reportContent').innerHTML = `<div class="report-md">${markdownToHtml(r.content)}</div>`;
+    await loadReports();
+  } catch(e) {
+    qs('#reportContent').innerHTML = '<div style="color:var(--red)">Failed to load report.</div>';
+  }
+}
+
+async function generateReport() {
+  const btn = qs('.btn-secondary');
+  const spinner = qs('#reportSpinner');
+  btn.disabled = true;
+  spinner.classList.remove('hidden');
+  spinner.classList.add('spinning');
+
+  try {
+    const res = await fetch(`${API}/api/aria/reports/generate`, { method: 'POST' });
+    const data = await res.json();
+    await loadReports();
+    openReport(data.id);
+  } catch(e) {
+    alert('Report generation failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    spinner.classList.remove('spinning');
+  }
+}
+
+// ── Tab navigation ────────────────────────────────────────────────────────────
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  qs(`#tab-${name}`).classList.add('active');
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function toggleSidebar() {
+  sidebarOpen = !sidebarOpen;
+  qs('#sidebar').classList.toggle('open', sidebarOpen);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function qs(sel) { return document.querySelector(sel); }
+function setText(sel, val) { const el = qs(sel); if (el) el.textContent = val; }
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
 function riskColor(level) {
-  return { low: 'var(--green)', medium: 'var(--amber)', high: 'var(--red)', critical: 'var(--red)' }[String(level || '').toLowerCase()] || 'var(--text-primary)';
+  return level === 'Critical' ? 'var(--red)'
+       : level === 'High'     ? 'var(--amber)'
+       : level === 'Medium'   ? 'var(--blue)'
+       : level === 'Low'      ? 'var(--green)'
+       : level === 'Clean'    ? 'var(--green)'
+       : 'var(--text3)';
+}
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const s = (Date.now() - new Date(iso.endsWith('Z') ? iso : iso + 'Z').getTime()) / 1000;
+  if (s < 60)   return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400)return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+function flash(msg) { alert(msg); }
+
+// Minimal markdown → HTML (headers, bold, italic, lists, code)
+function markdownToHtml(md) {
+  if (!md) return '';
+  let html = esc(md);  // escape first, then selectively unescape for formatting
+  html = md
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    // Headings
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,   '<h1>$1</h1>')
+    // Bold, italic
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,     '<em>$1</em>')
+    // Code blocks
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '<pre>$1</pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // HR
+    .replace(/^---+$/gm, '<hr/>')
+    // Bullet lists
+    .replace(/^\- (.+)$/gm, '<li>$1</li>')
+    .replace(/^• (.+)$/gm,  '<li>$1</li>')
+    // Numbered lists
+    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> in <ul>
+    .replace(/(<li>[\s\S]*?<\/li>)(\s*(?!<li>))/g, (m, list) => `<ul>${list}</ul>`)
+    // Paragraphs (double newlines)
+    .split(/\n{2,}/)
+    .map(block => {
+      if (/^<(h[1-6]|ul|ol|pre|hr)/.test(block.trim())) return block;
+      return `<p>${block.replace(/\n/g,' ')}</p>`;
+    })
+    .join('\n');
+  return html;
 }
-
-function setLoading(el, msg = 'Loading...') {
-  if (typeof el === 'string') el = document.getElementById(el);
-  if (el) el.innerHTML = `<div class="loading">${esc(msg)}</div>`;
-}
-
-function setEmpty(el, msg = 'No data') {
-  if (typeof el === 'string') el = document.getElementById(el);
-  if (el) el.innerHTML = `<div class="empty-inline">${esc(msg)}</div>`;
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-function showResults() {
-  document.getElementById('emptyState')?.classList.add('hidden');
-  document.getElementById('resultsContent')?.classList.remove('hidden');
-}
-
-function setScoreBars(breakdown = {}) {
-  const pairs = [
-    ['rule', breakdown.rule],
-    ['nlp', breakdown.nlp],
-    ['intel', breakdown.intel],
-    ['fusion', breakdown.fusion],
-  ];
-  pairs.forEach(([name, raw]) => {
-    const pctValue = `${Math.round((raw || 0) * 100)}%`;
-    const label = document.getElementById(`${name}Pct`);
-    const bar = document.getElementById(`${name}Bar`);
-    if (label) label.textContent = pctValue;
-    if (bar) bar.style.width = pctValue;
-  });
-}
-
-function renderScore(score, level, confidence, verdict, breakdown) {
-  showResults();
-  const value = document.getElementById('scoreValue');
-  const badge = document.getElementById('riskBadge');
-  const verdictEl = document.getElementById('plainVerdict');
-  const confEl = document.getElementById('confidenceValue');
-  const basis = document.getElementById('scoreBasis');
-  const riskCard = document.getElementById('riskCard');
-  const normalized = String(level || 'low').toLowerCase();
-  const gradients = {
-    low: 'linear-gradient(135deg, #051510, #0a1f1a)',
-    medium: 'linear-gradient(135deg, #150f00, #1f1800)',
-    high: 'linear-gradient(135deg, #150500, #1f0a00)',
-    critical: 'linear-gradient(135deg, #1a0000, #250000)',
-  };
-  if (riskCard) {
-    riskCard.style.background = gradients[normalized] || 'var(--panel-gradient)';
-    riskCard.style.borderLeftColor = riskColor(normalized);
-    riskCard.style.animation = normalized === 'critical' ? 'critical-pulse 1.8s infinite' : 'none';
-  }
-  if (value) {
-    value.textContent = score ?? 0;
-    value.style.color = riskColor(normalized);
-  }
-  if (badge) {
-    badge.textContent = normalized.toUpperCase();
-    badge.style.color = riskColor(normalized);
-    badge.style.border = `1px solid ${resolveRiskTint(normalized)}`;
-    badge.style.background = resolveRiskBg(normalized);
-  }
-  if (verdictEl) verdictEl.textContent = verdict || 'Awaiting analysis.';
-  if (confEl) confEl.textContent = `Confidence: ${confidence ? `${confidence}%` : '--'}`;
-  if (basis) {
-    basis.textContent = breakdown
-      ? `Rule ${pct(breakdown.rule)} · NLP ${pct(breakdown.nlp)} · Intel ${pct(breakdown.intel)} · Fusion ${pct(breakdown.fusion)}`
-      : 'No scoring details yet.';
-  }
-  setScoreBars(breakdown);
-}
-
-function pct(value) {
-  return `${Math.round((value || 0) * 100)}%`;
-}
-
-function resolveRiskBg(level) {
-  return {
-    low: 'rgba(16, 185, 129, 0.08)',
-    medium: 'rgba(245, 158, 11, 0.08)',
-    high: 'rgba(239, 68, 68, 0.08)',
-    critical: 'rgba(239, 68, 68, 0.12)',
-  }[level] || 'rgba(100, 116, 139, 0.08)';
-}
-
-function resolveRiskTint(level) {
-  return {
-    low: 'rgba(16, 185, 129, 0.3)',
-    medium: 'rgba(245, 158, 11, 0.3)',
-    high: 'rgba(239, 68, 68, 0.3)',
-    critical: 'rgba(239, 68, 68, 0.35)',
-  }[level] || 'rgba(100, 116, 139, 0.25)';
-}
-
-function buildFlagItems(signals = [], topFlags = [], dimensions = {}) {
-  const strongestCategory = Object.entries(dimensions || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0))[0]?.[0] || '';
-  const mapped = (topFlags || []).map((flag, index) => ({
-    title: flag,
-    detail: flag,
-    category: inferFlagCategory(flag, strongestCategory),
-    weight: Math.max(0.3, 1 - index * 0.12),
-  }));
-  const extra = (signals || []).slice(0, 5).map((signal) => ({
-    title: signal.name || 'Signal',
-    detail: signal.detail || 'Observed anomaly',
-    category: inferFlagCategory(`${signal.name} ${signal.detail}`, strongestCategory),
-    weight: Math.min(1, Math.max(0.24, (signal.score || 0.12) * 3.5)),
-  }));
-  return [...mapped, ...extra].slice(0, 6);
-}
-
-function inferFlagCategory(text, strongestCategory = '') {
-  const value = String(text || '').toLowerCase();
-  if (value.includes('link') || value.includes('url') || value.includes('domain')) return 'LINK';
-  if (value.includes('password') || value.includes('login') || value.includes('auth')) return 'AUTH';
-  if (value.includes('gift') || value.includes('money') || value.includes('urgent') || value.includes('invoice')) return 'SCAM';
-  if (value.includes('social') || value.includes('love') || value.includes('friend') || value.includes('trust')) return 'SOCIAL';
-  if (strongestCategory.includes('social')) return 'SOCIAL';
-  if (strongestCategory.includes('credential')) return 'AUTH';
-  if (strongestCategory.includes('link')) return 'LINK';
-  return 'SCAM';
-}
-
-function flagPalette(category) {
-  if (category === 'LINK') return { color: 'var(--cyan)', bg: 'rgba(6, 182, 212, 0.12)' };
-  if (category === 'AUTH') return { color: 'var(--purple)', bg: 'rgba(139, 92, 246, 0.12)' };
-  if (category === 'SOCIAL') return { color: 'var(--red)', bg: 'rgba(239, 68, 68, 0.12)' };
-  return { color: 'var(--amber)', bg: 'rgba(245, 158, 11, 0.12)' };
-}
-
-function renderSignals(signals, topFlags, dimensions) {
-  const detailEl = document.getElementById('signals');
-  const flagEl = document.getElementById('topFlags');
-  const mergedFlags = buildFlagItems(signals, topFlags, dimensions);
-
-  if (!mergedFlags.length) {
-    setEmpty(flagEl, 'No major risk indicators surfaced in the current result set.');
-  } else {
-    flagEl.innerHTML = mergedFlags.map((flag) => {
-      const palette = flagPalette(flag.category);
-      return `
-        <div class="flag-item">
-          <div class="flag-category" style="color:${palette.color};background:${palette.bg};border:1px solid ${palette.bg};">${esc(flag.category)}</div>
-          <div class="flag-main">
-            <div class="flag-title">${esc(flag.title)}</div>
-            <div class="sig-detail">${esc(flag.detail)}</div>
-          </div>
-          <div class="flag-weight">
-            <div class="flag-weight-bar"><span style="width:${Math.round(flag.weight * 100)}%;background:${palette.color};"></span></div>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  if (!signals?.length) {
-    setEmpty(detailEl, 'Signal telemetry will populate here after a successful scan.');
-  } else {
-    detailEl.innerHTML = signals.slice(0, 8).map((signal) => `
-      <div class="signal-card">
-        <div class="sig-name">${esc(signal.name || 'Signal')}</div>
-        <div class="sig-detail">${esc(signal.detail || 'No detail provided')}</div>
-      </div>`).join('');
-  }
-}
-
-function renderLinks(linkAnalysis) {
-  const summary = document.getElementById('linkSummaryRow');
-  const list = document.getElementById('linkTraces');
-  if (!linkAnalysis?.total_links) {
-    summary.innerHTML = '';
-    setEmpty(list, 'No URLs were extracted from the current payload.');
-    return;
-  }
-  summary.innerHTML = [
-    ['Total links', linkAnalysis.total_links],
-    ['High risk', linkAnalysis.high_risk_links],
-    ['Medium risk', linkAnalysis.medium_risk_links],
-    ['Aggregate score', (linkAnalysis.aggregate_score || 0).toFixed(2)],
-  ].map(([label, value]) => `<div class="stat-card"><div class="panel-heading">${esc(label)}</div><div>${esc(value)}</div></div>`).join('');
-  list.innerHTML = (linkAnalysis.links || []).slice(0, 12).map((link) => `
-    <div class="link-card">
-      <div class="link-host">${esc(link.host || link.raw || 'Unknown link')}</div>
-      <div class="sig-detail">${esc(link.raw || '')}</div>
-      <div class="flag-meta">
-        <span class="badge ${esc((link.verdict || 'low').toLowerCase())}">${esc((link.verdict || 'unknown').toUpperCase())}</span>
-        <span class="meta-pill">Score ${Math.round((link.score || 0) * 100)}</span>
-        ${link.ip ? `<span class="meta-pill">${esc(link.ip)}</span>` : ''}
-      </div>
-      <div class="flag-meta">${(link.flags || []).slice(0, 4).map((flag) => `<span class="flag-chip">${esc(flag)}</span>`).join('')}</div>
-    </div>`).join('');
-}
-
-function renderIoc(iocIntel) {
-  const meta = document.getElementById('iocMetaRow');
-  const list = document.getElementById('iocResults');
-  if (!iocIntel?.ioc_count) {
-    meta.innerHTML = '';
-    setEmpty(list, 'IOC enrichment results will appear here when indicators are detected.');
-    return;
-  }
-  const breakdown = Object.entries(iocIntel.ioc_type_breakdown || {}).map(([key, value]) => `<span class="meta-pill">${esc(key)}:${esc(value)}</span>`).join('');
-  meta.innerHTML = `
-    <span class="meta-pill">overall:${esc(iocIntel.overall_risk || 'minimal')}</span>
-    <span class="meta-pill">max:${esc(iocIntel.max_ioc_score || 0)}</span>
-    <span class="meta-pill">live:${iocIntel.live_feeds ? 'yes' : 'no'}</span>
-    ${breakdown}`;
-  list.innerHTML = (iocIntel.results || []).slice(0, 12).map((ioc) => `
-    <div class="ioc-card">
-      <div>
-        <div class="ioc-value">${esc(ioc.value)}</div>
-        <div class="flag-meta">
-          <span class="ioc-type-badge">${esc(ioc.ioc_type || 'ioc')}</span>
-          <span class="meta-pill">score ${esc(ioc.reputation_score || 0)}/100</span>
-        </div>
-        <div class="flag-meta">${(ioc.flags || []).slice(0, 4).map((flag) => `<span class="flag-chip">${esc(flag)}</span>`).join('')}</div>
-      </div>
-      <div class="badge ${esc((ioc.reputation || 'low').toLowerCase())}">${esc((ioc.reputation || 'unknown').toUpperCase())}</div>
-    </div>`).join('');
-}
-
-function renderDomain(analysis) {
-  const grid = document.getElementById('domainDetails');
-  const di = analysis?.domain_intelligence;
-  if (!di) {
-    setEmpty(grid, 'No domain intelligence was produced for this scan.');
-    return;
-  }
-  const link = analysis?.link_analysis?.links?.[0] || {};
-  const rep = link.domain_intelligence?.domain_reputation || {};
-  const whois = link.domain_intelligence?.whois_age || {};
-  const typo = link.domain_intelligence?.typosquatting || {};
-  grid.innerHTML = `
-    <div class="domain-card"><div class="sig-name">Brand impersonation</div><div class="sig-detail">${esc((di.brand_impersonation?.brands || []).join(', ') || 'No brand impersonation detected')}</div></div>
-    <div class="domain-card"><div class="sig-name">Domain reputation</div><div class="sig-detail">${esc(rep.category || 'unknown')}</div></div>
-    <div class="domain-card"><div class="sig-name">Typosquatting</div><div class="sig-detail">${esc(typo.closest_brand || 'No close brand match')}</div></div>
-    <div class="domain-card"><div class="sig-name">WHOIS age</div><div class="sig-detail">${esc(whois.age_days ?? 'Unknown')} days</div></div>`;
-}
-
-function renderEntities(entities) {
-  const grid = document.getElementById('entityGrid');
-  const groups = [
-    ['emails', 'Emails'],
-    ['phones', 'Phones'],
-    ['ipv4s', 'IPs'],
-    ['crypto_wallets', 'Wallets'],
-    ['numeric_ids', 'IDs'],
-    ['domains', 'Domains'],
-  ];
-  if (!entities) {
-    setEmpty(grid, 'Extracted entities will be shown after a successful parse.');
-    return;
-  }
-  grid.innerHTML = groups.map(([key, label]) => `
-    <div class="entity-card">
-      <div class="entity-card-title">${esc(label)}</div>
-      <div class="sig-detail">${(entities[key] || []).slice(0, 4).map(esc).join(', ') || '<span style="color:var(--text-secondary)">None found</span>'}</div>
-    </div>`).join('');
-}
-
-function renderIntent(intentProfile) {
-  const panel = document.getElementById('intentPanel');
-  if (!intentProfile?.top_intents?.length) {
-    setEmpty(panel, 'Intent scoring will render here when language patterns are recognized.');
-    return;
-  }
-  panel.innerHTML = intentProfile.top_intents.slice(0, 4).map((item) => {
-    const percent = Math.round((item.similarity || 0) > 1 ? item.similarity : (item.similarity || 0) * 100);
-    return `
-      <div class="intent-card">
-        <div class="sig-name mono">${esc(item.intent || 'unknown')}</div>
-        <div class="intent-progress">
-          <div class="intent-bar"><span style="width:${percent}%;"></span></div>
-          <div class="mono">${percent}%</div>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function renderCrawl(trace) {
-  const stats = document.getElementById('crawlStatsRow');
-  const list = document.getElementById('crawlPages');
-  if (!trace?.pages_crawled) {
-    stats.innerHTML = '';
-    setEmpty(list, 'Website crawl telemetry will appear here for URL-based scans.');
-    return;
-  }
-  stats.innerHTML = [
-    ['Verdict', trace.site_verdict || 'unknown'],
-    ['Pages', trace.pages_crawled || 0],
-    ['Scam risk', `${trace.scam_likelihood || 0}%`],
-    ['Malware risk', `${trace.malware_likelihood || 0}%`],
-  ].map(([label, value]) => `<div class="stat-card"><div class="panel-heading">${esc(label)}</div><div>${esc(value)}</div></div>`).join('');
-  const topPages = (trace.top_risky_pages || []).slice(0, 8);
-  if (!topPages.length) {
-    const failedPages = (trace.pages || []).filter((page) => page.status !== 'ok').slice(0, 5);
-    list.innerHTML = failedPages.length ? failedPages.map((page) => `
-      <div class="crawl-card">
-        <div class="crawl-title">${esc(page.url || '(Unavailable page)')}</div>
-        <div class="sig-detail">${esc(page.error || 'Crawler could not retrieve this page.')}</div>
-        <div class="flag-meta">
-          <span class="badge medium">INCOMPLETE</span>
-          <span class="meta-pill">depth ${esc(page.depth || 0)}</span>
-        </div>
-      </div>`).join('') : '<div class="empty-inline">No successful pages were returned by the crawler.</div>';
-    return;
-  }
-  list.innerHTML = topPages.map((page) => `
-    <div class="crawl-card">
-      <div class="crawl-title">${esc(page.title || '(No title)')}</div>
-      <div class="sig-detail">${esc(page.url || '')}</div>
-      <div class="flag-meta">
-        <span class="badge ${esc((page.risk_level || 'low').toLowerCase())}">${esc((page.risk_level || 'low').toUpperCase())}</span>
-        <span class="meta-pill">risk ${esc(page.score || 0)}/100</span>
-      </div>
-    </div>`).join('');
-}
-
-function renderCerts(certs) {
-  const list = document.getElementById('certList');
-  if (!certs?.length) {
-    setEmpty(list, 'Certificate intelligence will appear for HTTPS hosts.');
-    return;
-  }
-  list.innerHTML = certs.slice(0, 8).map((cert) => `
-    <div class="cert-card">
-      <div class="cert-host">${esc(cert.host || 'Unknown host')}</div>
-      <div class="sig-detail">Issuer: ${esc(cert.issuer || 'Unknown')}</div>
-      <div class="sig-detail">Valid to: ${esc(cert.valid_to || 'Unknown')}</div>
-    </div>`).join('');
-}
-
-function renderPlaybook(recommendations) {
-  const el = document.getElementById('recommendations');
-  if (!recommendations?.length) {
-    setEmpty(el, 'Recommended response actions will populate once scoring is complete.');
-    return;
-  }
-  el.innerHTML = recommendations.slice(0, 8).map((item, index) => `
-    <div class="playbook-item">
-      <div class="sig-name">Action ${index + 1}</div>
-      <div class="playbook-text">${esc(item)}</div>
-    </div>`).join('');
-}
-
-function saveRecentScan(item) {
-  const previous = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([item, ...previous].slice(0, 5)));
-  renderRecentScans();
-}
-
-function readFeedResults() {
-  try {
-    return JSON.parse(localStorage.getItem(FEED_RESULTS_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function writeFeedResults(results) {
-  localStorage.setItem(FEED_RESULTS_KEY, JSON.stringify(results));
-}
-
-function setFeedResult(feed, result) {
-  const current = readFeedResults();
-  current[feed] = result;
-  writeFeedResults(current);
-}
-
-function getFeedResult(feed) {
-  return readFeedResults()[feed] || null;
-}
-
-function renderRecentScans() {
-  const el = document.getElementById('recentScans');
-  if (!el) return;
-  const items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  if (!items.length) {
-    setEmpty(el, 'Recent analyst activity will appear here after the first scan.');
-    return;
-  }
-  el.innerHTML = items.map((item, index) => `
-    <div class="recent-item" onclick="restoreRecent(${index})">
-      <div class="badge ${esc((item.risk_level || 'low').toLowerCase())}">${esc((item.risk_level || 'low').toUpperCase())}</div>
-      <div class="recent-preview">${esc(item.preview || '')}</div>
-      <div class="recent-time">${esc(item.at || '')}</div>
-    </div>`).join('');
-}
-
-window.restoreRecent = function restoreRecent(index) {
-  const items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  const item = items[index];
-  if (!item) return;
-  setMode(item.mode || 'text');
-  if (item.mode === 'website') {
-    document.getElementById('websiteInput').value = item.text || '';
-  } else {
-    document.getElementById('textInput').value = item.text || '';
-    document.getElementById('charCount').textContent = String(item.text || '').length.toLocaleString();
-    detectQuickIocs(item.text || '');
-  }
-};
-
-function applyAnalysis(data, sourceText = '') {
-  lastAnalysis = data;
-  renderScore(data.score, data.risk_level, data.confidence, data.plain_verdict, data.score_breakdown);
-  renderSignals(data.signals, data.top_flags, data.dimensions);
-  renderLinks(data.link_analysis);
-  renderIoc(data.ioc_intelligence || null);
-  renderDomain(data);
-  renderEntities(data.entities);
-  renderIntent(data.intent_profile);
-  renderPlaybook(data.recommendations);
-  switchResultTab(activeResultTab);
-  saveRecentScan({
-    score: data.score,
-    risk_level: data.risk_level,
-    preview: sourceText.slice(0, 100),
-    text: sourceText.slice(0, 300),
-    at: new Date().toLocaleTimeString(),
-    mode: currentMode,
-  });
-  updateFeedCardsFromAnalysis(data, sourceText);
-}
-
-function applyWebsiteAnalysis(data, sourceText = '') {
-  lastAnalysis = data;
-  const level = data.verdict === 'DANGER' ? 'critical' : data.verdict === 'CAUTION' ? 'medium' : 'low';
-  const recommendations = [
-    data.verdict === 'DANGER' ? 'Do not visit this website.' : data.verdict === 'CAUTION' ? 'Proceed with caution and verify independently.' : 'Safe to visit with normal caution.',
-    data.domain ? `Domain: ${data.domain}` : 'No domain extracted.',
-    data.ip ? `Resolved IP: ${data.ip}` : 'IP resolution was unavailable.',
-  ];
-  renderScore(data.riskScore || 0, level, null, data.summary || 'Website analysis complete.', {
-    rule: Math.min(1, (data.riskScore || 0) / 100),
-    nlp: 0,
-    intel: Math.min(1, (data.riskScore || 0) / 100),
-    fusion: 0,
-  });
-  renderSignals([], [
-    `Domain: ${data.domain || 'unknown'}`,
-    `IP: ${data.ip || 'unresolved'}`,
-    `Abuse confidence: ${data.feeds?.abuseipdb?.abuseConfidence ?? 0}`,
-    `VirusTotal detections: ${data.feeds?.virustotal?.malicious ?? 0}`,
-    `OTX pulses: ${data.feeds?.otx?.pulseCount ?? 0}`,
-  ], {});
-  renderLinks({
-    total_links: 1,
-    high_risk_links: data.verdict === 'DANGER' ? 1 : 0,
-    medium_risk_links: data.verdict === 'CAUTION' ? 1 : 0,
-    aggregate_score: (data.riskScore || 0) / 100,
-    links: [{
-      host: data.domain || sourceText,
-      raw: data.input || sourceText,
-      verdict: level,
-      score: (data.riskScore || 0) / 100,
-      ip: data.ip || '',
-      flags: [
-        `country ${data.feeds?.abuseipdb?.country || 'unknown'}`,
-        `isp ${data.feeds?.abuseipdb?.isp || 'unknown'}`,
-      ],
-    }],
-  });
-  renderIoc({
-    ioc_count: 2,
-    overall_risk: level,
-    max_ioc_score: data.riskScore || 0,
-    live_feeds: true,
-    ioc_type_breakdown: { domain: data.domain ? 1 : 0, ip: data.ip ? 1 : 0 },
-    results: [
-      {
-        ioc_type: 'domain',
-        value: data.domain || sourceText,
-        reputation_score: data.riskScore || 0,
-        reputation: level,
-        flags: [`OTX ${data.feeds?.otx?.pulseCount ?? 0}`, `VT ${data.feeds?.virustotal?.malicious ?? 0}`],
-      },
-      {
-        ioc_type: 'ip',
-        value: data.ip || 'unresolved',
-        reputation_score: data.feeds?.abuseipdb?.abuseConfidence ?? 0,
-        reputation: (data.feeds?.abuseipdb?.abuseConfidence ?? 0) > 50 ? 'malicious' : 'clean',
-        flags: [`Abuse ${data.feeds?.abuseipdb?.abuseConfidence ?? 0}`, `Country ${data.feeds?.abuseipdb?.country || 'unknown'}`],
-      },
-    ].filter((item) => item.value && item.value !== 'unresolved'),
-  });
-  renderPlaybook(recommendations);
-  switchResultTab('ioc');
-  showResults();
-  saveRecentScan({
-    score: data.riskScore || 0,
-    risk_level: level,
-    preview: sourceText.slice(0, 100),
-    text: sourceText.slice(0, 300),
-    at: new Date().toLocaleTimeString(),
-    mode: 'website',
-  });
-  updateFeedCardsFromAnalysis(data, sourceText);
-}
-
-function applyWebsiteTraceAnalysis(trace, sourceText = '') {
-  if (!trace) return;
-  lastAnalysis = trace;
-  const level = String(trace.risk_level || 'low').toLowerCase();
-  const crawlState = trace.pages_failed && !trace.pages_ok
-    ? 'Full scan could not fetch pages. Results are incomplete.'
-    : trace.pages_failed
-      ? 'Full scan completed with partial crawl coverage.'
-      : 'Full scan completed successfully.';
-  const verdict = trace.site_verdict
-    ? `${crawlState} Website verdict: ${trace.site_verdict.replace(/_/g, ' ')}.`
-    : crawlState;
-  renderScore(
-    trace.highest_score || trace.average_score || 0,
-    level,
-    null,
-    verdict,
-    {
-      rule: Math.min(1, (trace.average_score || 0) / 100),
-      nlp: 0,
-      intel: Math.min(1, Math.max(trace.scam_likelihood || 0, trace.malware_likelihood || 0) / 100),
-      fusion: Math.min(1, (((trace.coverage_percent || 0) * 0.35) + ((trace.highest_score || 0) * 0.65)) / 100),
-    },
-  );
-  renderSignals([], [
-    'Scan mode: full website trace',
-    `Pages crawled: ${trace.pages_crawled || 0}`,
-    `Pages failed: ${trace.pages_failed || 0}`,
-    `Coverage: ${trace.coverage_percent || 0}%`,
-    `Scam likelihood: ${trace.scam_likelihood || 0}%`,
-    `Malware likelihood: ${trace.malware_likelihood || 0}%`,
-  ], {});
-  renderPlaybook(trace.recommendations || []);
-  switchResultTab('links');
-  showResults();
-  saveRecentScan({
-    score: trace.highest_score || trace.average_score || 0,
-    risk_level: level,
-    preview: sourceText.slice(0, 100),
-    text: sourceText.slice(0, 300),
-    at: new Date().toLocaleTimeString(),
-    mode: 'website',
-  });
-}
-
-function buildFeedSnapshotPayload(sourceText, websiteIntel, websiteTrace) {
-  const traceScore = websiteTrace?.highest_score || websiteTrace?.average_score || 0;
-  return {
-    input: sourceText,
-    riskScore: websiteIntel?.riskScore || traceScore || 0,
-    score: traceScore || websiteIntel?.riskScore || 0,
-    feeds: websiteIntel?.feeds || {},
-    details: websiteIntel?.details || {},
-    trace: websiteTrace || null,
-  };
-}
-
-async function analyze() {
-  const btn = document.getElementById('analyzeBtn');
-  const websiteInput = document.getElementById('websiteInput')?.value?.trim() || '';
-  const textValue = document.getElementById('textInput')?.value?.trim() || '';
-  console.log('[DEBUG] Analyze clicked');
-  console.log('[DEBUG] Input value:', currentMode === 'website' ? websiteInput : textValue);
-  console.log('[DEBUG] Tab:', currentMode);
-  setButtonLoading(btn, 'Analyzing...');
-  setFeedsQueryingState(true);
-  try {
-    if (currentMode === 'website') {
-      const websiteUrl = normalizeUrl(document.getElementById('websiteInput')?.value || '');
-      if (!websiteUrl) {
-        showToast('Enter a website URL first', 'warning');
-        return;
-      }
-      await fusionScan(true);
-      return;
-    }
-    if (currentMode === 'file') {
-      const value = document.getElementById('fileHashInput')?.value?.trim();
-      if (value && /^[a-fA-F0-9]{32,64}$/.test(value)) {
-        const data = await post('/api/v1/analyze', { text: value });
-        applyAnalysis(data, value);
-        switchResultTab('ioc');
-        return;
-      }
-      await analyzeFile();
-      return;
-    }
-    const text = document.getElementById('textInput')?.value?.trim();
-    if (!text) {
-      showToast('Enter text to scan', 'warning');
-      return;
-    }
-    if (looksLikeUrl(text)) {
-      document.getElementById('websiteInput').value = normalizeUrl(text);
-      await fusionScan(true);
-      return;
-    }
-    const data = await post('/api/v1/analyze', { text });
-    applyAnalysis(data, text);
-    switchResultTab('overview');
-  } catch (error) {
-    renderScore(0, 'low', 0, `Analysis failed: ${error.message}`, null);
-    showToast(`Analysis failed: ${error.message}`, 'error');
-  } finally {
-    resetButton(btn, getAnalyzeButtonLabel());
-    setFeedsQueryingState(false);
-  }
-}
-window.analyze = analyze;
-
-async function fusionScan(fromAnalyze = false) {
-  const text = document.getElementById('textInput')?.value?.trim() || null;
-  const url = normalizeUrl(document.getElementById('websiteInput')?.value || '');
-  if (!text && !url) {
-    showToast('Enter text or URL to analyze', 'warning');
-    return;
-  }
-  const btn = document.getElementById('analyzeBtn');
-  if (!fromAnalyze) setButtonLoading(btn, 'Analyzing...');
-  setFeedsQueryingState(true);
-  try {
-    console.log('[RiskIntel] fusionScan request', { text, url, currentMode });
-    const data = await post('/api/v1/fusion-scan', {
-      text: text || null,
-      website_url: url || null,
-      max_pages: 40,
-      max_depth: 3,
-      include_external: false,
-      exhaustive: true,
-    }, TIMEOUTS.fusion);
-    console.log('[RiskIntel] fusionScan response', data);
-    lastFusion = data;
-    const hasWebsiteTrace = Boolean(data.website_trace && (data.website_trace.pages_crawled || data.website_trace.pages_failed));
-    if (url) {
-      updateFeedCardsFromAnalysis(
-        buildFeedSnapshotPayload(url, data.website_intelligence || null, data.website_trace || null),
-        url,
-      );
-    }
-    if (data.text_analysis && !url) applyAnalysis(data.text_analysis, text || url);
-    if (data.website_intelligence && !hasWebsiteTrace) applyWebsiteAnalysis(data.website_intelligence, url);
-    if (data.website_trace) {
-      lastWebTrace = data.website_trace;
-      applyWebsiteTraceAnalysis(data.website_trace, url);
-      renderCrawl(data.website_trace);
-      renderCerts(data.website_trace.certificates);
-      if (!data.website_intelligence && !data.text_analysis) {
-        showResults();
-        switchResultTab('links');
-      }
-    }
-  } catch (error) {
-    renderScore(0, 'low', 0, `Analysis failed: ${error.message}`, null);
-    showToast(`Fusion scan failed: ${error.message}`, 'error');
-  } finally {
-    if (!fromAnalyze) resetButton(btn, getAnalyzeButtonLabel());
-    setFeedsQueryingState(false);
-  }
-}
-window.fusionScan = fusionScan;
-
-async function runWebsiteIntel(url, fromAnalyze = false) {
-  const btn = document.getElementById('analyzeBtn');
-  if (!fromAnalyze) setButtonLoading(btn, 'Analyzing...');
-  setFeedsQueryingState(true);
-  try {
-    const endpoint = '/api/v1/website-intel';
-    const payload = { url };
-    console.log('[DEBUG] Making API call to:', endpoint);
-    console.log('[DEBUG] Payload:', payload);
-    const data = await post(endpoint, payload, TIMEOUTS.ioc);
-    console.log('[DEBUG] Response data:', data);
-    applyWebsiteAnalysis(data, url);
-    console.log('[DEBUG] Result state set');
-    switchResultTab('ioc');
-  } catch (error) {
-    console.error('[DEBUG] Error:', error);
-    renderScore(0, 'low', 0, `Website analysis failed: ${error.message}`, null);
-    showToast(`Website analysis failed: ${error.message}`, 'error');
-  } finally {
-    if (!fromAnalyze) resetButton(btn, getAnalyzeButtonLabel());
-    setFeedsQueryingState(false);
-  }
-}
-
-async function traceWebsite() {
-  return fusionScan();
-}
-window.traceWebsite = traceWebsite;
-
-async function analyzeFile() {
-  const fi = document.getElementById('fileInput');
-  if (!fi?.files?.[0]) {
-    showToast('Select a file first', 'warning');
-    return;
-  }
-  const btn = document.getElementById('analyzeBtn');
-  setButtonLoading(btn, 'Analyzing...');
-  setFeedsQueryingState(true);
-  try {
-    const file = fi.files[0];
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
-    const data = await post('/api/v1/malware/analyze-file', {
-      filename: file.name,
-      content_base64: btoa(binary),
-    }, TIMEOUTS.file);
-    renderScore(data.risk_score, data.risk_level, null, `File: ${file.name}`, null);
-    renderSignals([], data.suspicious_signals || [], {});
-    renderIoc(data.ioc_intelligence || null);
-    renderPlaybook(data.risk_level === 'critical' || data.risk_level === 'high'
-      ? ['Isolate the file immediately.', 'Block the hash in endpoint tooling.', 'Review execution history and related hosts.']
-      : ['No immediate high-risk evidence.', 'Run an endpoint scan.', 'Continue monitoring behavior.']);
-    switchResultTab('recommendations');
-    updateFeedCardsFromAnalysis(data, file.name);
-  } catch (error) {
-    renderScore(0, 'low', 0, `File analysis failed: ${error.message}`, null);
-    showToast(`File analysis failed: ${error.message}`, 'error');
-  } finally {
-    resetButton(btn, 'Analyze');
-    setFeedsQueryingState(false);
-  }
-}
-window.analyzeFile = analyzeFile;
-
-function batchMode() {
-  document.getElementById('batchModal')?.classList.remove('hidden');
-}
-window.batchMode = batchMode;
-
-function closeBatch() {
-  document.getElementById('batchModal')?.classList.add('hidden');
-}
-window.closeBatch = closeBatch;
-
-async function runBatch() {
-  const raw = document.getElementById('batchInput')?.value || '';
-  const texts = raw.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 100);
-  const results = document.getElementById('batchResults');
-  if (!texts.length) {
-    showToast('Provide at least one line for batch analysis', 'warning');
-    return;
-  }
-  setLoading(results, 'Running batch analysis...');
-  try {
-    const data = await post('/api/v1/analyze/batch', { texts });
-    results.innerHTML = (data.results || []).map((item, index) => `
-      <div class="batch-row">
-        <div class="sig-name">Item ${index + 1}</div>
-        <div class="sig-detail">${esc(texts[index].slice(0, 140))}</div>
-        <div class="flag-meta">
-          <span class="badge ${esc((item.risk_level || 'low').toLowerCase())}">${esc((item.risk_level || 'low').toUpperCase())}</span>
-          <span class="meta-pill">score ${esc(item.score || 0)}</span>
-        </div>
-      </div>`).join('');
-  } catch (error) {
-    results.innerHTML = `<div class="empty-inline">Batch analysis failed: ${esc(error.message)}</div>`;
-  }
-}
-window.runBatch = runBatch;
-
-async function quickIocLookup() {
-  const type = document.getElementById('iocType')?.value;
-  const value = document.getElementById('iocValue')?.value?.trim();
-  const live = document.getElementById('iocLive')?.checked || false;
-  const result = document.getElementById('iocLookupResult');
-  if (!type || !value) {
-    showToast('Enter an indicator value first', 'warning');
-    return;
-  }
-  setLoading(result, 'Looking up indicator...');
-  try {
-    const data = await fetchJson(`/api/v1/ioc/${type}/${encodeURIComponent(value)}?live=${live}`, {}, TIMEOUTS.ioc);
-    const top = data.results?.[0];
-    if (!top) {
-      setEmpty(result, 'No intelligence was returned for this indicator.');
-      return;
-    }
-    result.innerHTML = `
-      <div class="lookup-card">
-        <div class="sig-name">${esc(top.value || value)}</div>
-        <div class="flag-meta">
-          <span class="badge ${esc((top.reputation || 'low').toLowerCase())}">${esc((top.reputation || 'unknown').toUpperCase())}</span>
-          <span class="meta-pill">score ${esc(top.reputation_score || 0)}/100</span>
-          <span class="meta-pill">feed hits ${esc(top.listed_in || 0)}</span>
-        </div>
-        <div class="flag-meta">${(top.flags || []).slice(0, 4).map((flag) => `<span class="flag-chip">${esc(flag)}</span>`).join('')}</div>
-      </div>`;
-  } catch (error) {
-    result.innerHTML = `<div class="empty-inline">Lookup failed: ${esc(error.message)}</div>`;
-  }
-}
-window.quickIocLookup = quickIocLookup;
-
-function getVisibleFeedProviders(feeds = []) {
-  return feeds.filter((provider) => DEFAULT_FEED_ORDER.includes(String(provider.name || '').toLowerCase()));
-}
-
-function summaryChip(label, value, icon) {
-  return `<div class="feed-summary-chip"><span>${icon}</span><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
-}
-
-function latencyTone(ms) {
-  if (typeof ms !== 'number') return 'bad';
-  if (ms < 500) return 'ok';
-  if (ms <= 2000) return 'warn';
-  return 'bad';
-}
-
-function renderFeedSummary(summary = {}) {
-  const bar = document.getElementById('feedSummaryBar');
-  if (!bar) return;
-  bar.innerHTML = [
-    summaryChip('Configured', `${summary.configured || 0}/${summary.total || 0}`, '⌁'),
-    summaryChip('Reachable', `${summary.reachable || 0}/${summary.total || 0}`, '↔'),
-    summaryChip('Auth-valid', `${summary.auth_valid || 0}/${summary.total || 0}`, '✓'),
-  ].join('');
-}
-
-function buildFeedTerminal(provider, meta) {
-  const stored = getFeedResult(meta.slug || provider.name);
-  if (stored?.response) {
-    return stored.response;
-  }
-  const statusText = provider.reachable ? 'Response: reachable' : provider.configured ? 'Response: unavailable' : 'Response: not configured';
-  const score = provider.auth_valid ? 'Threat score: 0/100' : provider.configured ? 'Threat score: auth required' : 'Threat score: standby';
-  return `> Querying 8.8.8.8...\n> ${statusText}\n> ${score}`;
-}
-
-function renderFeedCard(provider) {
-  const key = String(provider.name || '').toLowerCase();
-  const meta = FEED_META[key] || FEED_META[provider.name] || { title: provider.display_name || provider.name || 'Feed', description: 'Threat feed', icon: '•', capabilities: [] };
-  const statusTone = provider.reachable ? 'ok' : provider.configured ? 'bad' : 'warn';
-  const liveText = provider.reachable ? 'LIVE' : provider.configured ? 'UNREACHABLE' : 'STANDBY';
-  const httpCode = provider.http_status || provider.status_code || '000';
-  const latency = typeof provider.latency_ms === 'number' ? `${provider.latency_ms}ms` : 'n/a';
-  const latencyClass = latencyTone(provider.latency_ms);
-  const quota = provider.configured ? 80 : 100;
-  const terminalText = provider.__terminalText || buildFeedTerminal(provider, meta);
-  const glow = provider.reachable && provider.auth_valid ? 'glow' : '';
-  const querying = provider.__querying ? 'querying' : '';
-  const unreachable = provider.configured && provider.reachable === false ? 'unreachable' : '';
-  return `
-    <article class="feed-card feed-${esc(meta.slug || key)} ${glow} ${querying} ${unreachable}" data-feed="${esc(key)}">
-      <div class="feed-header">
-        <div class="feed-title-row">
-          <div class="feed-logo" style="color:${esc(meta.accent || '#3b82f6')}">${esc(meta.icon || '•')}</div>
-          <div>
-            <div class="feed-name">${esc(meta.title || provider.display_name || provider.name || 'Feed')}</div>
-            <div class="feed-description">${esc(meta.description || '')}</div>
-          </div>
-        </div>
-        <div class="feed-status-line">
-          <span class="pulse-dot ${statusTone === 'ok' ? 'green' : statusTone === 'warn' ? 'amber' : 'red'}"></span>
-          <span class="feed-status-text ${statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : 'bad'}">${esc(liveText)}</span>
-          <span class="feed-chip ${provider.auth_valid ? 'ok' : 'bad'}">HTTP ${esc(httpCode)}</span>
-          <span class="feed-chip ${latencyClass}">${esc(latency)}</span>
-        </div>
-      </div>
-      <div class="feed-section">
-        <div class="panel-heading">Last query result</div>
-        <div class="terminal-shell">
-          <div class="terminal-output">${esc(terminalText)}</div>
-        </div>
-      </div>
-      <div class="feed-section">
-        <div class="panel-heading">Capabilities</div>
-        <div class="feed-capabilities">${(meta.capabilities || []).map((cap) => `<span class="feed-capability">✓ ${esc(cap)}</span>`).join('')}</div>
-      </div>
-      <div class="feed-section">
-        <div class="panel-heading">API quota</div>
-        <div class="quota-row">
-          <div class="quota-bar"><span style="width:${quota}%;background:linear-gradient(90deg, ${esc(meta.accent || '#3b82f6')}, rgba(255,255,255,0.12));"></span></div>
-          <div>${quota}%</div>
-        </div>
-        <div class="quota-note">${esc(meta.quotaLabel || 'Free tier')}</div>
-      </div>
-    </article>`;
-}
-
-function renderFeedGrid(feeds = []) {
-  const grid = document.getElementById('feedGrid');
-  if (!grid) return;
-  const visibleProviders = getVisibleFeedProviders(feeds);
-  if (!visibleProviders.length) {
-    setEmpty(grid, 'Threat feeds are standing by. Configure keys to populate live telemetry.');
-    return;
-  }
-  grid.innerHTML = visibleProviders.map(renderFeedCard).join('');
-}
-
-function updateFeedCardsFromAnalysis(payload, sourceText = '') {
-  const inputSample = sourceText || payload?.input || payload?.plain_verdict || payload?.filename || 'payload';
-  const riskScore = payload?.riskScore || payload?.score || payload?.risk_score || payload?.max_ioc_score || 0;
-  const feedSnapshots = {
-    otx: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nOTX pulses: ${payload?.feeds?.otx?.pulseCount ?? payload?.rawResults?.otx?.pulse_count ?? 0}\nThreat score: ${riskScore}/100`,
-    },
-    abuseipdb: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nAbuse confidence: ${payload?.feeds?.abuseipdb?.abuseConfidence ?? payload?.details?.abuseConfidence ?? 0}\nThreat score: ${riskScore}/100`,
-    },
-    virustotal: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nVT malicious: ${payload?.feeds?.virustotal?.malicious ?? payload?.details?.vtDetections ?? 0}\nThreat score: ${riskScore}/100`,
-    },
-  };
-  Object.entries(feedSnapshots).forEach(([feed, snapshot]) => setFeedResult(feed, snapshot));
-
-  if (!document.getElementById('feedGrid')) return;
-  const feedCards = document.querySelectorAll('.feed-card');
-  if (!feedCards.length) return;
-  feedCards.forEach((card) => {
-    const key = String(card.dataset.feed || '').toLowerCase();
-    const terminal = card.querySelector('.terminal-output');
-    if (!terminal) return;
-    const feedKey = key === 'alienvault_otx' ? 'otx' : key;
-    const snapshot = getFeedResult(feedKey);
-    if (!snapshot) return;
-    terminal.textContent = snapshot.response;
-    card.classList.remove('querying');
-    void card.offsetWidth;
-    card.classList.add('querying');
-    setTimeout(() => card.classList.remove('querying'), 900);
-  });
-}
-
-function renderFeedSummary(summary = {}) {
-  const bar = document.getElementById('feedSummaryBar');
-  if (!bar) return;
-  const total = summary.total || 0;
-  const panels = [
-    { icon: 'CFG', label: 'Configuration', current: summary.configured || 0 },
-    { icon: 'NET', label: 'Network Reach', current: summary.reachable || 0 },
-    { icon: 'AUTH', label: 'Auth Validity', current: summary.auth_valid || 0 },
-  ];
-  bar.innerHTML = panels.map((item) => {
-    const pct = total ? Math.round((item.current / total) * 100) : 0;
-    const tone = item.current >= 4 ? 'ok' : item.current <= 2 ? 'bad' : 'warn';
-    return `
-      <div class="feed-summary-panel ${tone}">
-        <div class="feed-summary-head">
-          <span class="feed-summary-icon">${esc(item.icon)}</span>
-          <span class="feed-summary-label">${esc(item.label)}</span>
-        </div>
-        <div class="feed-summary-value">${esc(item.current)} / ${esc(total)} <span>providers</span></div>
-        <div class="feed-summary-progress"><span style="width:${pct}%;"></span></div>
-        <div class="feed-summary-percent">${esc(pct)}%</div>
-      </div>`;
-  }).join('');
-}
-
-function updateFeedCardsFromAnalysis(payload, sourceText = '') {
-  const inputSample = sourceText || payload?.input || payload?.plain_verdict || payload?.filename || 'payload';
-  const riskScore = payload?.riskScore || payload?.score || payload?.risk_score || payload?.max_ioc_score || 0;
-  const trace = payload?.trace || null;
-  const traceSuffix = trace
-    ? `\nPages crawled: ${trace.pages_crawled || 0}\nSite verdict: ${trace.site_verdict || 'unknown'}`
-    : '';
-  const feedSnapshots = {
-    otx: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nOTX pulses: ${payload?.feeds?.otx?.pulseCount ?? payload?.rawResults?.otx?.pulse_count ?? 0}\nThreat score: ${riskScore}/100${traceSuffix}`,
-    },
-    abuseipdb: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nAbuse confidence: ${payload?.feeds?.abuseipdb?.abuseConfidence ?? payload?.details?.abuseConfidence ?? 0}\nThreat score: ${riskScore}/100${traceSuffix}`,
-    },
-    virustotal: {
-      input: inputSample,
-      threatScore: riskScore,
-      timestamp: new Date().toISOString(),
-      response: `Input: ${inputSample.slice(0, 48)}\nVT malicious: ${payload?.feeds?.virustotal?.malicious ?? payload?.details?.vtDetections ?? 0}\nThreat score: ${riskScore}/100${traceSuffix}`,
-    },
-  };
-  Object.entries(feedSnapshots).forEach(([feed, snapshot]) => setFeedResult(feed, snapshot));
-
-  if (!document.getElementById('feedGrid')) return;
-  const feedCards = document.querySelectorAll('.feed-card');
-  if (!feedCards.length) return;
-  feedCards.forEach((card) => {
-    const key = String(card.dataset.feed || '').toLowerCase();
-    const terminal = card.querySelector('.terminal-output');
-    if (!terminal) return;
-    const feedKey = key === 'alienvault_otx' ? 'otx' : key;
-    const snapshot = getFeedResult(feedKey);
-    if (!snapshot) return;
-    terminal.textContent = snapshot.response;
-    card.classList.remove('querying');
-    void card.offsetWidth;
-    card.classList.add('querying');
-    setTimeout(() => card.classList.remove('querying'), 900);
-  });
-}
-
-function setFeedsQueryingState(active) {
-  const grid = document.getElementById('feedGrid');
-  if (!grid) return;
-  const cards = grid.querySelectorAll('.feed-card');
-  cards.forEach((card) => {
-    const terminal = card.querySelector('.terminal-output');
-    const dot = card.querySelector('.pulse-dot');
-    const statusText = card.querySelector('.feed-status-text');
-    card.classList.toggle('querying', active);
-    if (active && terminal) {
-      terminal.textContent = '> Querying indicator...\n> Waiting for upstream telemetry...\n> Correlating reputation feeds...';
-    }
-    if (active && dot) {
-      dot.className = 'pulse-dot amber';
-    }
-    if (active && statusText) {
-      statusText.textContent = 'SCANNING';
-      statusText.className = 'feed-status-text warn';
-    }
-  });
-}
-
-async function refreshFeeds(probe = false) {
-  const grid = document.getElementById('feedGrid');
-  const checked = document.getElementById('feedLastChecked');
-  const liveState = document.getElementById('feedLiveState');
-  if (grid) grid.innerHTML = `<div class="loading">${probe ? 'Probing all feeds...' : 'Loading feed telemetry...'}</div>`;
-  try {
-    const data = await fetchJson(probe ? '/api/v1/feeds/probe' : '/api/v1/feeds/status/live', {}, probe ? 30000 : 10000);
-    if (checked) checked.textContent = `Last checked: ${new Date().toLocaleTimeString()}${probe ? ' (active probe)' : ' (snapshot)'}`;
-    if (liveState) liveState.textContent = feedsSocket && feedsSocket.readyState === WebSocket.OPEN ? 'Live websocket transport connected' : 'Snapshot mode with 30 second polling';
-    renderFeedSummary(data.summary || {});
-    renderFeedGrid(data.feeds || []);
-  } catch (error) {
-    if (grid) grid.innerHTML = `<div class="empty-inline">Unable to load feed telemetry: ${esc(error.message)}</div>`;
-  }
-}
-window.refreshFeeds = refreshFeeds;
-
-function connectFeedsLive() {
-  const liveState = document.getElementById('feedLiveState');
-  if (!liveState) return;
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  try {
-    feedsSocket = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/feeds/status`);
-  } catch {
-    liveState.textContent = 'Snapshot mode with 30 second polling';
-    feedsPollTimer = setInterval(() => refreshFeeds(false), 30000);
-    return;
-  }
-  feedsSocket.onopen = () => {
-    liveState.textContent = 'Live websocket transport connected';
-  };
-  feedsSocket.onmessage = (event) => {
-    try {
-      const payload = JSON.parse(event.data);
-      if (payload.type !== 'feed_status' || !payload.data) return;
-      if (liveState) liveState.textContent = 'Live websocket transport connected';
-      document.getElementById('feedLastChecked').textContent = `Last checked: ${new Date(payload.timestamp || Date.now()).toLocaleTimeString()} (live)`;
-      renderFeedSummary(payload.data.summary || {});
-      renderFeedGrid(payload.data.feeds || []);
-    } catch {
-      // noop
-    }
-  };
-  feedsSocket.onclose = () => {
-    liveState.textContent = 'Snapshot mode with 30 second polling';
-    if (feedsPollTimer) clearInterval(feedsPollTimer);
-    feedsPollTimer = setInterval(() => refreshFeeds(false), 30000);
-  };
-}
-
-function renderFeedSummary(summary = {}) {
-  const bar = document.getElementById('feedSummaryBar');
-  if (!bar) return;
-  bar.innerHTML = [
-    summaryChip('Configured', `${summary.configured || 0}/${summary.total || 0}`, 'CFG'),
-    summaryChip('Reachable', `${summary.reachable || 0}/${summary.total || 0}`, 'NET'),
-    summaryChip('Auth-valid', `${summary.auth_valid || 0}/${summary.total || 0}`, 'AUTH'),
-  ].join('');
-}
-
-function buildFeedTerminal(provider, meta) {
-  const stored = getFeedResult(meta.slug || provider.name);
-  if (stored?.response) return stored.response;
-  const statusText = provider.reachable ? 'Provider reachable' : provider.configured ? 'Provider unavailable' : 'API key not configured';
-  const authText = provider.auth_valid ? 'Authentication accepted' : provider.configured ? 'Authentication failed or not verified' : 'Authentication idle';
-  return `No recent scan snapshot\n${statusText}\n${authText}`;
-}
-
-function renderFeedCard(provider) {
-  const key = String(provider.name || '').toLowerCase();
-  const meta = FEED_META[key] || FEED_META[provider.name] || { title: provider.display_name || provider.name || 'Feed', description: 'Threat feed', icon: '*', capabilities: [] };
-  const statusTone = provider.auth_valid ? 'ok' : provider.reachable ? 'warn' : provider.configured ? 'bad' : 'warn';
-  const liveText = provider.auth_valid ? 'READY' : provider.reachable ? 'AUTH CHECK' : provider.configured ? 'OFFLINE' : 'NOT CONFIGURED';
-  const httpCode = provider.http_status || provider.status_code || '000';
-  const latency = typeof provider.latency_ms === 'number' ? `${provider.latency_ms}ms` : 'n/a';
-  const latencyClass = latencyTone(provider.latency_ms);
-  const quota = provider.configured ? 80 : 100;
-  const terminalText = provider.__terminalText || buildFeedTerminal(provider, meta);
-  const glow = provider.reachable && provider.auth_valid ? 'glow' : '';
-  const querying = provider.__querying ? 'querying' : '';
-  const unreachable = provider.configured && provider.reachable === false ? 'unreachable' : '';
-  const statusSummary = provider.auth_valid
-    ? 'Ready for live enrichment'
-    : provider.reachable
-      ? 'Provider responded, but auth may be limited'
-      : provider.configured
-        ? 'Configured, but the provider did not respond'
-        : 'Add an API key to enable this feed';
-  return `
-    <article class="feed-card feed-${esc(meta.slug || key)} ${glow} ${querying} ${unreachable}" data-feed="${esc(key)}">
-      <div class="feed-header">
-        <div class="feed-title-row">
-          <div class="feed-logo" style="color:${esc(meta.accent || '#3b82f6')}">${esc(meta.icon || '*')}</div>
-          <div>
-            <div class="feed-name">${esc(meta.title || provider.display_name || provider.name || 'Feed')}</div>
-            <div class="feed-description">${esc(meta.description || '')}</div>
-          </div>
-        </div>
-        <div class="feed-status-line">
-          <span class="pulse-dot ${statusTone === 'ok' ? 'green' : statusTone === 'warn' ? 'amber' : 'red'}"></span>
-          <span class="feed-status-text ${statusTone === 'ok' ? 'ok' : statusTone === 'warn' ? 'warn' : 'bad'}">${esc(liveText)}</span>
-          <span class="feed-chip ${provider.auth_valid ? 'ok' : 'bad'}">HTTP ${esc(httpCode)}</span>
-          <span class="feed-chip ${latencyClass}">${esc(latency)}</span>
-        </div>
-      </div>
-      <div class="feed-health-note">${esc(statusSummary)}</div>
-      <div class="feed-section">
-        <div class="panel-heading">Latest scan snapshot</div>
-        <div class="terminal-shell">
-          <div class="terminal-output">${esc(terminalText)}</div>
-        </div>
-      </div>
-      <div class="feed-section">
-        <div class="panel-heading">Capabilities</div>
-        <div class="feed-capabilities">${(meta.capabilities || []).map((cap) => `<span class="feed-capability">OK ${esc(cap)}</span>`).join('')}</div>
-      </div>
-      <div class="feed-section">
-        <div class="panel-heading">API quota</div>
-        <div class="quota-row">
-          <div class="quota-bar"><span style="width:${quota}%;background:linear-gradient(90deg, ${esc(meta.accent || '#3b82f6')}, rgba(255,255,255,0.12));"></span></div>
-          <div>${quota}%</div>
-        </div>
-        <div class="quota-note">${esc(meta.quotaLabel || 'Free tier')}</div>
-      </div>
-    </article>`;
-}
-
-async function loadCases() {
-  const el = document.getElementById('caseList');
-  const stat = document.getElementById('caseFilterStatus')?.value || '';
-  const sev = document.getElementById('caseFilterSeverity')?.value || '';
-  const search = document.getElementById('caseSearch')?.value?.trim() || '';
-  setLoading(el, 'Loading case queue...');
-  try {
-    let url = '/api/v1/cases?limit=50';
-    if (stat) url += `&status=${stat}`;
-    if (sev) url += `&severity=${sev}`;
-    if (search) url += `&search=${encodeURIComponent(search)}`;
-    const data = await fetchJson(url, {}, 10000);
-    const rows = data.results || [];
-    if (!rows.length) {
-      el.innerHTML = '<div class="empty-inline">No matching cases in the current queue.</div>';
-      return;
-    }
-    el.innerHTML = rows.map((c) => `
-      <div class="case-card ${esc((c.severity || 'low').toLowerCase())}" onclick="openCase(${c.id})">
-        <div class="case-main">
-          <div class="case-id">#${esc(c.id)}</div>
-          <div class="case-title">${esc(c.title || 'Untitled')}</div>
-          <div class="case-meta">
-            <span>${esc(c.created_at || c.updated_at || 'Now')}</span>
-            <span>${esc(c.assigned_to || 'Unassigned')}</span>
-            <span>${esc(c.ioc_value || c.source_value || 'No IOC')}</span>
-          </div>
-        </div>
-        <div class="case-actions">
-          <div class="case-status-row">
-            <span class="badge ${esc((c.severity || 'low').toLowerCase())}">${esc((c.severity || 'low').toUpperCase())}</span>
-            <span class="badge ${esc((c.status || 'new').toLowerCase())}">${esc((c.status || 'new').toUpperCase())}</span>
-          </div>
-          <div class="flag-meta">
-            <button class="btn-outline compact" onclick="event.stopPropagation(); updateCaseStatus(${c.id}, 'triaged')">Triage</button>
-            <button class="btn-outline compact" onclick="event.stopPropagation(); openCase(${c.id})">View</button>
-            <button class="btn-outline compact" onclick="event.stopPropagation(); deleteCase(${c.id})">Delete</button>
-          </div>
-        </div>
-      </div>`).join('');
-  } catch (error) {
-    el.innerHTML = `<div class="empty-inline">Failed to load case queue: ${esc(error.message)}</div>`;
-  }
-}
-window.loadCases = loadCases;
-
-async function openCase(id) {
-  const detail = document.getElementById('caseDetail');
-  const list = document.getElementById('caseList');
-  detail?.classList.remove('hidden');
-  if (list) list.style.display = 'none';
-  currentCase = id;
-  try {
-    const data = await fetchJson(`/api/v1/cases/${id}`, {}, 8000);
-    document.getElementById('caseDetailTitle').textContent = data.title || `Case #${id}`;
-    document.getElementById('caseDetailMeta').innerHTML = `
-      <div class="case-meta-item"><div class="panel-heading">Severity</div><div>${esc((data.severity || '?').toUpperCase())}</div></div>
-      <div class="case-meta-item"><div class="panel-heading">Status</div><div>${esc((data.status || '?').toUpperCase())}</div></div>
-      <div class="case-meta-item"><div class="panel-heading">Reporter</div><div>${esc(data.reporter || '?')}</div></div>
-      <div class="case-meta-item"><div class="panel-heading">Assigned</div><div>${esc(data.assigned_to || 'Unassigned')}</div></div>`;
-    const comments = data.comments || [];
-    document.getElementById('caseComments').innerHTML = comments.length ? comments.map((comment) => `
-      <div class="comment-card">
-        <div class="sig-name">${esc(comment.author || '?')}</div>
-        <div class="comment-text">${esc(comment.message || '')}</div>
-        <div class="comment-time">${esc(comment.created_at || '')}</div>
-      </div>`).join('') : '<div class="empty-inline">No analyst comments have been posted yet.</div>';
-  } catch (error) {
-    document.getElementById('caseDetailTitle').textContent = `Error: ${error.message}`;
-  }
-}
-window.openCase = openCase;
-
-function closeCaseDetail() {
-  document.getElementById('caseDetail')?.classList.add('hidden');
-  document.getElementById('caseList').style.display = '';
-  currentCase = null;
-}
-window.closeCaseDetail = closeCaseDetail;
-
-async function addComment() {
-  if (!currentCase) return;
-  const message = document.getElementById('commentInput')?.value?.trim();
-  if (!message) {
-    showToast('Write a comment before posting', 'warning');
-    return;
-  }
-  try {
-    await post(`/api/v1/cases/${currentCase}/comments`, { message });
-    document.getElementById('commentInput').value = '';
-    openCase(currentCase);
-  } catch (error) {
-    showToast(`Failed to add comment: ${error.message}`, 'error');
-  }
-}
-window.addComment = addComment;
-
-function showCreateCase() {
-  document.getElementById('createCaseModal')?.classList.remove('hidden');
-}
-window.showCreateCase = showCreateCase;
-
-function hideCreateCase() {
-  document.getElementById('createCaseModal')?.classList.add('hidden');
-}
-window.hideCreateCase = hideCreateCase;
-
-async function createCase() {
-  const title = document.getElementById('caseTitle')?.value?.trim();
-  const severity = document.getElementById('caseSeverity')?.value || 'medium';
-  const assigned = document.getElementById('caseAssignee')?.value?.trim() || null;
-  const tags = (document.getElementById('caseTags')?.value || '').split(',').map((item) => item.trim()).filter(Boolean);
-  if (!title) {
-    showToast('Title required', 'warning');
-    return;
-  }
-  try {
-    await post('/api/v1/cases', { title, severity, assigned_to: assigned, tags, findings: {}, recommendations: [], status: 'new', source_type: 'manual' });
-    hideCreateCase();
-    showToast('Case created', 'success');
-    loadCases();
-  } catch (error) {
-    showToast(`Failed to create case: ${error.message}`, 'error');
-  }
-}
-window.createCase = createCase;
-
-async function updateCaseStatus(id, status) {
-  try {
-    await fetchJson(`/api/v1/cases/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    }, 10000);
-    showToast('Case updated', 'success');
-    loadCases();
-  } catch (error) {
-    showToast(`Failed to update case: ${error.message}`, 'error');
-  }
-}
-window.updateCaseStatus = updateCaseStatus;
-
-async function deleteCase(id) {
-  try {
-    await fetchJson(`/api/v1/cases/${id}`, { method: 'DELETE' }, 10000);
-    showToast('Case deleted', 'success');
-    loadCases();
-  } catch (error) {
-    showToast(`Failed to delete case: ${error.message}`, 'error');
-  }
-}
-window.deleteCase = deleteCase;
-
-function saveToCase() {
-  const payload = lastAnalysis || lastFusion?.text_analysis || lastWebTrace;
-  if (!payload) {
-    showToast('No analysis available to save', 'warning');
-    return;
-  }
-  const inputValue = currentMode === 'website'
-    ? (document.getElementById('websiteInput')?.value?.trim() || '')
-    : (document.getElementById('fileHashInput')?.value?.trim() || document.getElementById('textInput')?.value?.trim() || '');
-  const tags = (payload.top_flags || []).slice(0, 5).map((flag) => String(flag).split(' ')[0].toLowerCase());
-  post('/api/v1/cases', {
-    title: `Scan: ${inputValue.slice(0, 60) || (payload.risk_level || 'risk').toUpperCase()}`,
-    source_type: currentMode,
-    source_value: inputValue,
-    severity: payload.risk_level === 'critical' ? 'critical' : payload.risk_level === 'high' ? 'high' : payload.risk_level === 'medium' ? 'medium' : 'low',
-    status: 'new',
-    findings: payload,
-    recommendations: payload.recommendations || [],
-    ioc_type: currentMode,
-    ioc_value: inputValue,
-    risk_score: payload.score || payload.risk_score || 0,
-    scan_result: payload,
-    tags,
-  }).then(() => {
-    showToast('Case saved successfully', 'success');
-    activateTab('cases');
-    loadCases();
-  }).catch((error) => {
-    showToast(`Failed to save case: ${error.message}`, 'error');
-  });
-}
-window.saveToCase = saveToCase;
-
-function buildTextSummary(payload) {
-  if (payload?.site_verdict) {
-    return `Website verdict: ${payload.site_verdict}\nScam risk: ${payload.scam_likelihood}%\nMalware risk: ${payload.malware_likelihood}%\nPages crawled: ${payload.pages_crawled}`;
-  }
-  return `Risk score: ${payload?.score ?? 0}/100 (${payload?.risk_level || 'low'})\nConfidence: ${payload?.confidence ?? '--'}%\n${payload?.plain_verdict || ''}`;
-}
-
-function copyReport() {
-  const payload = lastFusion?.text_analysis || lastAnalysis || lastWebTrace;
-  if (!payload) {
-    showToast('No report available to copy', 'warning');
-    return;
-  }
-  const summary = buildTextSummary(payload);
-  navigator.clipboard?.writeText(summary).then(() => {
-    showToast('Summary copied', 'success');
-  }).catch(() => {
-    const textarea = document.createElement('textarea');
-    textarea.value = summary;
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    textarea.remove();
-    showToast('Summary copied', 'success');
-  });
-}
-window.copyReport = copyReport;
-
-function downloadReport() {
-  const payload = lastFusion || lastAnalysis || lastWebTrace;
-  if (!payload) {
-    showToast('No report available to download', 'warning');
-    return;
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = Object.assign(document.createElement('a'), { href: url, download: `crie-report-${Date.now()}.json` });
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-window.downloadReport = downloadReport;
-
-function esc(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function normalizeUrl(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^[a-z0-9.-]+\.[a-z]{2,}/i.test(raw)) return `https://${raw}`;
-  return raw;
-}
-
-function looksLikeUrl(input) {
-  const value = String(input || '').trim();
-  return /^(https?:\/\/|www\.)/i.test(value) || /^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(value);
-}
-
-function setButtonLoading(button, text) {
-  if (!button) return;
-  button.disabled = true;
-  button.classList.add('loading');
-  button.dataset.originalText = button.querySelector('.btn-label')?.textContent || button.textContent;
-  const label = button.querySelector('.btn-label');
-  if (label) {
-    label.textContent = text;
-  } else {
-    button.textContent = text;
-  }
-}
-
-function resetButton(button, fallback) {
-  if (!button) return;
-  button.disabled = false;
-  button.classList.remove('loading');
-  const label = button.querySelector('.btn-label');
-  if (label) {
-    label.textContent = button.dataset.originalText || fallback;
-  } else {
-    button.textContent = button.dataset.originalText || fallback;
-  }
-}
-
-function clearAll() {
-  const text = document.getElementById('textInput');
-  const url = document.getElementById('websiteInput');
-  const hash = document.getElementById('fileHashInput');
-  if (text) text.value = '';
-  if (url) url.value = '';
-  if (hash) hash.value = '';
-  document.getElementById('charCount').textContent = '0';
-  document.getElementById('quickExtract')?.classList.add('hidden');
-  document.getElementById('quickIocList').innerHTML = '';
-}
-window.clearAll = clearAll;
-
-function showToast(message, type = 'success') {
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  document.body.appendChild(toast);
-  requestAnimationFrame(() => toast.classList.add('toast-show'));
-  setTimeout(() => {
-    toast.classList.remove('toast-show');
-    setTimeout(() => toast.remove(), 280);
-  }, 2800);
-}
-
-checkHealth();
-setInterval(checkHealth, 30000);
-renderRecentScans();
-setMode('text');
-switchResultTab('overview');
-connectFeedsLive();
