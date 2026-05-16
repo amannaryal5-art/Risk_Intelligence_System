@@ -19,7 +19,8 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 if __package__:
@@ -203,18 +204,19 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if (_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.get("/")
-async def root() -> dict:
-    return {
-        "service": "risk-intelligence-system",
-        "status": "ok",
-        "ui": "removed",
-        "docs": "/docs",
-        "health": "/api/v1/health",
-    }
+async def root():
+    index = _DIST / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return {"service": "risk-intelligence-system", "status": "ok", "docs": "/docs"}
 
 AUTH_ENFORCED = os.getenv("RISKINTEL_ENFORCE_AUTH", "true").lower() == "true"
 DEFAULT_API_KEY = os.getenv("RISKINTEL_DEFAULT_API_KEY", "").strip()
@@ -1323,3 +1325,14 @@ async def aria_get_report(rid: int):
 async def aria_generate_report():
     rid = await run_daily_report()
     return {"id": rid, "status": "generated"}
+
+
+@app.get("/{full_path:path}")
+async def catch_all(full_path: str):
+    # Let API and docs routes continue to resolve normally.
+    if any(full_path.startswith(p) for p in ("api/", "docs", "redoc", "openapi")):
+        raise HTTPException(status_code=404)
+    index = _DIST / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    raise HTTPException(status_code=404)
