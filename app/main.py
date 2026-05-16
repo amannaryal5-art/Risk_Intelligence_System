@@ -699,6 +699,10 @@ async def startup_diagnostics() -> None:
             logger.info("  %s: configured (%s chars)", env_key, len(value))
         else:
             logger.warning("  %s: missing", env_key)
+    if os.getenv("VERCEL"):
+        logger.info("Skipping startup feed probe on Vercel serverless runtime")
+        logger.info("=====================================")
+        return
     try:
         results = await refresh_feed_status_cache()
         for feed in results.get("feeds", []):
