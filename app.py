@@ -85,7 +85,7 @@ def render_page(request: Request, template_name: str, title: str, view: str) -> 
             "page_title": title,
             "page_view": view,
             "app_version": "v3.0",
-            "ws_path": "/ws/live",
+            "ws_path": "",
             "ioc_stream_path": "/api/v1/ioc/stream",
         },
     )

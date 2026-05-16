@@ -47,9 +47,10 @@ function updateConnectionBadge(state) {
   if (!badge) return;
   badge.className = `status-chip ${state.state}`;
   if (state.state === "live") badge.textContent = "Live";
+  if (state.state === "polling") badge.textContent = "Polling";
   if (state.state === "reconnecting") badge.textContent = `Reconnecting (${Math.ceil(state.retryIn || 1)}s)`;
   if (state.state === "offline") badge.textContent = "Offline";
-  overlay.hidden = state.state === "live";
+  overlay.hidden = state.state === "live" || state.state === "polling";
   $("#offlineMessage").textContent = state.state === "reconnecting"
     ? `Reconnecting to backend in ${Math.ceil(state.retryIn || 1)}s.`
     : "Connection lost. Retrying live control plane.";

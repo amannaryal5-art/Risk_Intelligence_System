@@ -17,7 +17,11 @@ export class LiveDataBus {
   }
 
   connect() {
-    this.connectWebSocket();
+    if (this.wsPath) {
+      this.connectWebSocket();
+    } else {
+      this.publish("connection", { state: "polling" });
+    }
     this.connectSse();
   }
 
