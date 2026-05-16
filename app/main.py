@@ -8,6 +8,7 @@ import os
 import socket
 import sys
 import time
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -146,7 +147,7 @@ class FeedConfigRequest(BaseModel):
 # ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DEFAULT_DATA_DIR = "/tmp/riskintel" if os.getenv("VERCEL") else str(BASE_DIR / "data")
+DEFAULT_DATA_DIR = str(Path(tempfile.gettempdir()) / "riskintel") if os.getenv("VERCEL") else str(BASE_DIR / "data")
 DATA_DIR = Path(os.getenv("RISKINTEL_DATA_DIR", DEFAULT_DATA_DIR))
 logger = logging.getLogger("riskintel")
 
@@ -1169,6 +1170,10 @@ except ImportError:
 
 @app.on_event("startup")
 async def _aria_startup():
+    if _os.getenv("VERCEL"):
+        import logging
+        logging.getLogger("uvicorn.error").info("ARIA scheduler disabled on Vercel serverless runtime")
+        return
     if _SCHEDULER_OK and _scheduler:
         _scheduler.add_job(
             run_monitoring_cycle, "interval", minutes=30, id="aria_monitor"

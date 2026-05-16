@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,7 +19,12 @@ import httpx
 
 logger = logging.getLogger("aria.monitor")
 
-DB_PATH = Path(__file__).parent / "data" / "aria.db"
+DEFAULT_DB_DIR = (
+    Path(tempfile.gettempdir()) / "riskintel"
+    if os.getenv("VERCEL")
+    else Path(__file__).parent / "data"
+)
+DB_PATH = Path(os.getenv("RISKINTEL_DATA_DIR", str(DEFAULT_DB_DIR))) / "aria.db"
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
