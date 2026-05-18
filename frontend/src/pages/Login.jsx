@@ -10,6 +10,7 @@ import Spinner from '../components/ui/Spinner'
 export default function Login() {
   const [apiKey, setApiKey] = useState('')
   const [connectedUser, setConnectedUser] = useState(null)
+  const [initializing, setInitializing] = useState(false)
   const setAuth = useAuthStore((state) => state.setAuth)
   const navigate = useNavigate()
 
@@ -27,7 +28,11 @@ export default function Login() {
       setConnectedUser(user)
       setAuth(apiKey, user)
       toast.success(`Connected as ${user.username}`)
-      navigate('/')
+      setInitializing(true)
+      window.setTimeout(() => {
+        setInitializing(false)
+        navigate('/')
+      }, 1500)
     },
     onError: (error) => {
       setConnectedUser(null)
@@ -72,6 +77,15 @@ export default function Login() {
           ) : null}
         </div>
       </div>
+
+      {initializing ? (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#050913]/85">
+          <div className="panel-elevated p-6 text-center">
+            <div className="mx-auto h-20 w-20 rounded-full border border-cyan-500/30 scan-radar" />
+            <p className="mt-4 font-mono text-lg text-slate-100">Initializing System Scan...</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

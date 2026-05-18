@@ -1,39 +1,14 @@
-import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Activity } from 'lucide-react'
-import { fusionScan } from '../api/analysis'
-import AnalyzeResultCard from '../components/shared/AnalyzeResultCard'
+import client from '../api/client'
 import Spinner from '../components/ui/Spinner'
 
 export default function FusionScan() {
-  const [form, setForm] = useState({
-    text: '',
-    website_url: '',
-    max_pages: 80,
-    max_depth: 3,
-    include_external: false,
-    exhaustive: true,
-  })
-  const [elapsed, setElapsed] = useState(0)
-  const timerRef = useRef(null)
-
   const mutation = useMutation({
-    mutationFn: () => fusionScan(form),
-    onMutate: () => {
-      setElapsed(0)
-      timerRef.current = window.setInterval(() => setElapsed((v) => v + 1), 1000)
-    },
-    onSettled: () => {
-      if (timerRef.current) {
-        window.clearInterval(timerRef.current)
-        timerRef.current = null
-      }
-    },
+    mutationFn: async () => (await client.post('/api/fusion-scan/auto')).data,
     onError: (err) => toast.error(err.response?.data?.detail || 'Fusion scan failed'),
   })
-
-  const canRun = form.text.trim().length > 0 || form.website_url.trim().length > 0
 
   return (
     <div className="space-y-6">
@@ -41,91 +16,45 @@ export default function FusionScan() {
         <div className="mb-4 flex items-center gap-3">
           <Activity className="h-5 w-5 text-cyan-400" />
           <p className="font-mono text-lg text-slate-50">Fusion Scan</p>
-          <span className="text-sm text-slate-500">
-            Combines text analysis + website intelligence + live IOC feeds into one pass
-          </span>
         </div>
-
-        <div className="space-y-4">
-          <textarea
-            className="field min-h-32"
-            placeholder="Paste suspicious text, email body, or phishing content…"
-            value={form.text}
-            onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))}
-          />
-          <input
-            className="field"
-            placeholder="Website URL to scan (optional) — e.g. https://suspicious-site.com"
-            value={form.website_url}
-            onChange={(e) => setForm((f) => ({ ...f, website_url: e.target.value }))}
-          />
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-xs text-slate-400">Max pages</label>
-              <input
-                className="field"
-                type="number"
-                min="1"
-                max="500"
-                value={form.max_pages}
-                onChange={(e) => setForm((f) => ({ ...f, max_pages: Number(e.target.value) }))}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-slate-400">Max depth</label>
-              <input
-                className="field"
-                type="number"
-                min="0"
-                max="8"
-                value={form.max_depth}
-                onChange={(e) => setForm((f) => ({ ...f, max_depth: Number(e.target.value) }))}
-              />
-            </div>
-            <div className="flex flex-col justify-end gap-3 pb-1">
-              <label className="flex items-center gap-2 text-sm text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={form.include_external}
-                  onChange={(e) => setForm((f) => ({ ...f, include_external: e.target.checked }))}
-                />
-                Include external links
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={form.exhaustive}
-                  onChange={(e) => setForm((f) => ({ ...f, exhaustive: e.target.checked }))}
-                />
-                Exhaustive crawl
-              </label>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={!canRun || mutation.isPending}
-              onClick={() => mutation.mutate()}
-            >
-              {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? `Running… ${elapsed}s` : 'Run Fusion Scan'}
-            </button>
-            {mutation.isPending ? (
-              <p className="text-xs text-slate-500">
-                Crawling + analyzing — this may take 20–90 seconds
-              </p>
-            ) : null}
-          </div>
-        </div>
+        <p className="text-sm text-slate-400">Run auto fusion across the latest collected IOCs and combine text, web, and feed risk signals.</p>
+        <button type="button" className="btn-primary mt-4" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+          {mutation.isPending ? <Spinner /> : null}
+          Run Auto Fusion on Latest IOCs
+        </button>
       </div>
 
       {mutation.data ? (
-        <div className="panel-elevated p-6">
-          <p className="section-title mb-4">Fusion Scan Result</p>
-          <AnalyzeResultCard result={mutation.data} />
+        <div className="panel p-5">
+          <div className="grid gap-4 md:grid-cols-3 text-sm text-slate-300">
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">IOCs processed: {mutation.data.iocs_processed}</div>
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">High fusion risk: {mutation.data.high_fusion_risk}</div>
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">Cases created: {mutation.data.cases_created}</div>
+          </div>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-border">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-slate-950/80 text-slate-400">
+                <tr>
+                  <th className="px-4 py-3">IOC</th>
+                  <th className="px-4 py-3">Text Risk</th>
+                  <th className="px-4 py-3">Web Risk</th>
+                  <th className="px-4 py-3">Feed Risk</th>
+                  <th className="px-4 py-3">Fusion Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(mutation.data.results || []).map((row) => (
+                  <tr key={row.ioc} className="border-t border-border bg-surface/70">
+                    <td className="px-4 py-3 font-mono text-slate-200">{row.ioc}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.text_risk}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.web_risk}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.feed_risk}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.fusion_score}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : null}
     </div>

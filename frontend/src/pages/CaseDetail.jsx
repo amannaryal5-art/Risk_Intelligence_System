@@ -138,7 +138,7 @@ export default function CaseDetail() {
           <div className="panel p-5">
             <p className="section-title">Quick Actions</p>
             <div className="mt-4 grid gap-3">
-              <button type="button" className="btn-secondary" onClick={() => navigate('/analyze')}>Re-analyze</button>
+              <button type="button" className="btn-secondary" onClick={() => navigate('/intelligence')}>Re-analyze</button>
               <button type="button" className="btn-secondary" onClick={() => downloadJson(`case-${item.id}.json`, item)}>Export JSON</button>
             </div>
           </div>

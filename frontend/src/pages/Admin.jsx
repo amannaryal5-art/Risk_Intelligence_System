@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { clearCaches, getAuditLogs, getCacheStats, getMetrics } from '../api/admin'
+import { clearCaches, getAuditLogs, getCacheStats, getMetrics, getPipelineMetrics } from '../api/admin'
 import Spinner from '../components/ui/Spinner'
 import { downloadCsv, formatDate } from '../lib/utils'
 
@@ -23,13 +23,14 @@ export default function Admin() {
   const auditQuery = useQuery({ queryKey: ['admin', 'audit', limit], queryFn: () => getAuditLogs(limit) })
   const cacheQuery = useQuery({ queryKey: ['admin', 'cache'], queryFn: getCacheStats })
   const metricsQuery = useQuery({ queryKey: ['admin', 'metrics'], queryFn: getMetrics })
+  const pipelineMetricsQuery = useQuery({ queryKey: ['admin', 'pipeline-metrics'], queryFn: getPipelineMetrics })
   const clearMutation = useMutation({ mutationFn: clearCaches })
   const chartData = useMemo(() => parseMetrics(metricsQuery.data), [metricsQuery.data])
 
   return (
     <div className="space-y-6">
       <div className="flex gap-3">
-        {['Audit Logs', 'Cache', 'Metrics'].map((item) => <button key={item} type="button" className={tab === item ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab(item)}>{item}</button>)}
+        {['Audit Logs', 'Cache', 'Metrics', 'Pipeline Metrics'].map((item) => <button key={item} type="button" className={tab === item ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab(item)}>{item}</button>)}
       </div>
 
       {tab === 'Audit Logs' ? (
@@ -94,6 +95,45 @@ export default function Admin() {
               </div>
             </div>
           )}
+        </div>
+      ) : null}
+
+      {tab === 'Pipeline Metrics' ? (
+        <div className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {[
+              ['Pipeline runs today', pipelineMetricsQuery.data?.pipeline_runs_today || 0],
+              ['Average run duration', `${Math.round((pipelineMetricsQuery.data?.avg_pipeline_duration_ms || 0) / 1000)}s`],
+              ['Tasks failed (7d)', pipelineMetricsQuery.data?.tasks_failed_last_7d || 0],
+              ['Alerts generated (7d)', pipelineMetricsQuery.data?.alerts_generated_last_7d || 0],
+              ['Cases auto-created (7d)', pipelineMetricsQuery.data?.cases_auto_created_last_7d || 0],
+              ['IOCs collected total', pipelineMetricsQuery.data?.iocs_collected_total || 0],
+            ].map(([label, value]) => (
+              <div key={label} className="panel p-5">
+                <p className="section-title">{label}</p>
+                <p className="mt-4 font-mono text-2xl">{value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="panel p-5">
+            <p className="section-title">Last 10 Pipeline Runs</p>
+            <div className="mt-4 overflow-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="text-slate-400"><tr><th className="px-4 py-3">Started</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Duration</th><th className="px-4 py-3">Passed</th><th className="px-4 py-3">Failed</th></tr></thead>
+                <tbody>
+                  {(pipelineMetricsQuery.data?.last_runs || []).map((row) => (
+                    <tr key={row.id} className="border-t border-border">
+                      <td className="px-4 py-3 text-slate-300">{formatDate(row.started_at)}</td>
+                      <td className="px-4 py-3 text-slate-300">{row.status}</td>
+                      <td className="px-4 py-3 text-slate-300">{row.duration_ms || 0}ms</td>
+                      <td className="px-4 py-3 text-slate-300">{row.tasks_passed}</td>
+                      <td className="px-4 py-3 text-slate-300">{row.tasks_failed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

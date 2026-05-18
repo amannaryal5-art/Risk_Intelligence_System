@@ -1,391 +1,128 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import client from '../api/client'
+import { usePipeline } from '../hooks/usePipeline'
 
 const TASKS = [
-  {
-    id: 'health',
-    label: 'Health check',
-    description: 'Ping backend and verify the API is alive.',
-    icon: '🩺',
-    run: async () => {
-      const res = await client.get('/api/v1/health')
-      return { ok: true, detail: `Status: ${res.data?.status ?? 'ok'}` }
-    },
-  },
-  {
-    id: 'feeds',
-    label: 'Probe live feeds',
-    description: 'Test OTX, AbuseIPDB, VirusTotal, and URLScan connectivity.',
-    icon: '📡',
-    run: async () => {
-      const res = await client.get('/api/v1/feeds/probe')
-      const feeds = res.data?.feeds ?? []
-      const live = feeds.filter((feed) => feed.auth_valid).length
-      return { ok: true, detail: `${live}/${feeds.length} feeds live` }
-    },
-  },
-  {
-    id: 'monitoring',
-    label: 'Run ARIA monitoring cycle',
-    description: 'Scan all overdue assets for new threats.',
-    icon: '🔍',
-    run: async () => {
-      const res = await client.post('/api/aria/monitoring/run')
-      const count = res.data?.scanned ?? res.data?.count ?? 0
-      return { ok: true, detail: `${count} assets scanned` }
-    },
-  },
-  {
-    id: 'assets',
-    label: 'Re-scan all assets',
-    description: 'Trigger an immediate scan for every registered asset.',
-    icon: '🛡️',
-    run: async () => {
-      const listRes = await client.get('/api/aria/assets')
-      const assets = Array.isArray(listRes.data) ? listRes.data : listRes.data?.assets ?? []
-      let queued = 0
-
-      await Promise.allSettled(
-        assets.map(async (asset) => {
-          await client.post(`/api/aria/assets/${asset.id}/scan`)
-          queued += 1
-        }),
-      )
-
-      return { ok: true, detail: `${queued}/${assets.length} assets queued` }
-    },
-  },
-  {
-    id: 'alerts',
-    label: 'Refresh alert queue',
-    description: 'Pull the latest ARIA alerts and count unseen items.',
-    icon: '🔔',
-    run: async () => {
-      const res = await client.get('/api/aria/alerts')
-      const alerts = Array.isArray(res.data) ? res.data : []
-      const unseen = alerts.filter((alert) => !alert.seen).length
-      return { ok: true, detail: `${alerts.length} alerts, ${unseen} unseen` }
-    },
-  },
-  {
-    id: 'report',
-    label: 'Generate daily report',
-    description: 'Generate the latest ARIA intelligence report.',
-    icon: '📊',
-    run: async () => {
-      const res = await client.post('/api/aria/reports/generate')
-      const id = res.data?.id ?? res.data?.report_id ?? 'generated'
-      return { ok: true, detail: `Report #${id} ready` }
-    },
-  },
-  {
-    id: 'cases',
-    label: 'Sync case store',
-    description: 'Refresh open cases from the backend.',
-    icon: '📁',
-    run: async () => {
-      const res = await client.get('/api/v1/cases')
-      const count = res.data?.count ?? (Array.isArray(res.data) ? res.data.length : 0)
-      return { ok: true, detail: `${count} cases loaded` }
-    },
-  },
-  {
-    id: 'stats',
-    label: 'Update ARIA stats',
-    description: 'Refresh asset and risk distribution counters.',
-    icon: '📈',
-    run: async () => {
-      const res = await client.get('/api/aria/stats')
-      const { total = 0, critical = 0, high = 0 } = res.data ?? {}
-      return { ok: true, detail: `${total} assets, ${critical} critical, ${high} high` }
-    },
-  },
+  ['run_device_scan', 'Run Device Scan'],
+  ['health_check', 'Health check'],
+  ['probe_live_feeds', 'Probe live feeds'],
+  ['run_aria_monitoring_cycle', 'Run ARIA monitoring cycle'],
+  ['run_unified_intelligence_scan', 'Run Unified Intelligence Scan'],
+  ['sync_software_inventory', 'Sync Software Inventory'],
+  ['rescan_all_assets', 'Re-scan all assets'],
+  ['refresh_alert_queue', 'Refresh alert queue'],
+  ['generate_daily_report', 'Generate daily report'],
+  ['sync_case_store', 'Sync case store'],
+  ['update_aria_stats', 'Update ARIA stats'],
 ]
-
-const STATUS = {
-  idle: 'idle',
-  running: 'running',
-  done: 'done',
-  error: 'error',
-  skip: 'skip',
-}
-
-function useAutoInterval(callback, intervalMs, active) {
-  const callbackRef = useRef(callback)
-
-  useEffect(() => {
-    callbackRef.current = callback
-  }, [callback])
-
-  useEffect(() => {
-    if (!active) return undefined
-    const id = window.setInterval(() => callbackRef.current(), intervalMs)
-    return () => window.clearInterval(id)
-  }, [intervalMs, active])
-}
 
 export default function AutoPilot() {
   const queryClient = useQueryClient()
-  const [taskStates, setTaskStates] = useState(() =>
-    Object.fromEntries(TASKS.map((task) => [task.id, { status: STATUS.idle, detail: '', ms: 0 }])),
-  )
-  const [running, setRunning] = useState(false)
+  const pipeline = usePipeline()
+  const [busyTask, setBusyTask] = useState(null)
   const [autoMode, setAutoMode] = useState(false)
-  const [autoIntervalMin, setAutoIntervalMin] = useState(10)
-  const [log, setLog] = useState([])
-  const [selected, setSelected] = useState(() => new Set(TASKS.map((task) => task.id)))
-  const [lastRun, setLastRun] = useState(null)
-  const logRef = useRef(null)
+  const [intervalHours, setIntervalHours] = useState(6)
 
-  const addLog = useCallback((message, type = 'info') => {
-    const ts = new Date().toLocaleTimeString()
-    setLog((current) => [...current.slice(-199), { ts, message, type }])
-  }, [])
+  const scheduleQuery = useQuery({
+    queryKey: ['autopilot', 'schedule'],
+    queryFn: async () => (await client.get('/api/autopilot/schedule')).data,
+  })
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [log])
+    if (scheduleQuery.data) {
+      setAutoMode(Boolean(scheduleQuery.data.enabled))
+      setIntervalHours(scheduleQuery.data.interval_hours || 6)
+    }
+  }, [scheduleQuery.data])
 
-  const runTask = useCallback(async (task) => {
-    const startedAt = Date.now()
-    setTaskStates((current) => ({
-      ...current,
-      [task.id]: { status: STATUS.running, detail: 'Running...', ms: 0 },
-    }))
-    addLog(`-> ${task.label}`)
+  const runAll = async () => {
+    await client.post('/api/autopilot/run-all')
+    queryClient.invalidateQueries({ queryKey: ['autopilot', 'last-run'] })
+  }
 
+  const runTask = async (task) => {
+    setBusyTask(task)
     try {
-      const result = await task.run()
-      const ms = Date.now() - startedAt
-      setTaskStates((current) => ({
-        ...current,
-        [task.id]: { status: STATUS.done, detail: result.detail, ms, error: '' },
-      }))
-      addLog(`OK ${task.label} - ${result.detail} (${ms}ms)`, 'ok')
-    } catch (error) {
-      const ms = Date.now() - startedAt
-      const detail = error?.response?.data?.detail ?? error?.message ?? 'Unknown error'
-      setTaskStates((current) => ({
-        ...current,
-        [task.id]: { status: STATUS.error, detail, ms, error: detail },
-      }))
-      addLog(`ERR ${task.label} - ${detail}`, 'err')
+      await client.post(`/api/autopilot/run-task/${task}`)
+    } finally {
+      setBusyTask(null)
     }
-  }, [addLog])
-
-  const runAll = useCallback(async () => {
-    if (running) return
-
-    setRunning(true)
-    const toRun = TASKS.filter((task) => selected.has(task.id))
-    addLog(`Starting ${toRun.length} task(s)...`, 'start')
-
-    setTaskStates((current) => {
-      const next = { ...current }
-      TASKS.forEach((task) => {
-        next[task.id] = selected.has(task.id)
-          ? { status: STATUS.idle, detail: '', ms: 0 }
-          : { ...current[task.id], status: STATUS.skip }
-      })
-      return next
-    })
-
-    for (const task of toRun) {
-      await runTask(task)
-    }
-
-    queryClient.invalidateQueries()
-    const finishedAt = new Date()
-    setLastRun(finishedAt)
-    addLog(`Done at ${finishedAt.toLocaleTimeString()}`, 'start')
-    setRunning(false)
-  }, [addLog, queryClient, runTask, running, selected])
-
-  useAutoInterval(runAll, autoIntervalMin * 60 * 1000, autoMode && !running)
-
-  const allDone = TASKS.every((task) => {
-    const status = taskStates[task.id]?.status
-    return status === STATUS.done || status === STATUS.error || status === STATUS.skip
-  })
-  const anyError = TASKS.some((task) => taskStates[task.id]?.status === STATUS.error)
-
-  const toggleSelect = (id) => {
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
   }
 
-  const statusClasses = {
-    [STATUS.idle]: 'text-slate-500',
-    [STATUS.running]: 'text-blue-400',
-    [STATUS.done]: 'text-emerald-400',
-    [STATUS.error]: 'text-red-400',
-    [STATUS.skip]: 'text-slate-400',
-  }
-
-  const statusIcons = {
-    [STATUS.idle]: '○',
-    [STATUS.running]: '◌',
-    [STATUS.done]: '✓',
-    [STATUS.error]: '✗',
-    [STATUS.skip]: '–',
+  const saveSchedule = async (enabled) => {
+    setAutoMode(enabled)
+    await client.post('/api/autopilot/schedule', { enabled, interval_hours: intervalHours })
+    queryClient.invalidateQueries({ queryKey: ['autopilot', 'schedule'] })
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-6">
       <div className="panel p-6">
         <h1 className="font-mono text-2xl text-slate-50">AutoPilot</h1>
-        <p className="mt-2 max-w-3xl text-sm text-slate-400">
-          Run recurring CRIE operational tasks from one place, or enable scheduled auto-mode to keep the platform fresh without manual refreshes.
-        </p>
+        <p className="mt-2 text-sm text-slate-400">Run the full CRIE automation pipeline or trigger a single operational task.</p>
       </div>
 
       <div className="panel p-5">
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={runAll}
-            disabled={running}
-            className={`rounded-xl px-6 py-3 text-sm font-semibold text-white transition ${
-              running
-                ? 'cursor-not-allowed bg-slate-700'
-                : anyError && allDone
-                  ? 'bg-red-800 hover:bg-red-700'
-                  : allDone
-                    ? 'bg-emerald-700 hover:bg-emerald-600'
-                    : 'bg-blue-600 hover:bg-blue-500'
-            }`}
-          >
-            {running ? 'Running...' : allDone ? 'Run Again' : 'Run All Tasks'}
+          <button type="button" className="btn-primary" onClick={runAll} disabled={pipeline.isRunning}>
+            Run All Tasks
           </button>
-
-          <label className="flex items-center gap-3 text-sm text-slate-300">
-            <button
-              type="button"
-              onClick={() => setAutoMode((value) => !value)}
-              className={`relative h-6 w-11 rounded-full transition ${autoMode ? 'bg-blue-600' : 'bg-slate-700'}`}
-            >
-              <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${autoMode ? 'left-6' : 'left-1'}`} />
-            </button>
-            Auto mode
-          </label>
-
-          {autoMode ? (
-            <div className="flex items-center gap-2 text-sm text-slate-400">
-              <span>every</span>
-              <select
-                className="field w-28 py-2"
-                value={autoIntervalMin}
-                onChange={(event) => setAutoIntervalMin(Number(event.target.value))}
-              >
-                {[5, 10, 15, 30, 60].map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {minutes} min
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-
-          {lastRun ? (
-            <span className="ml-auto text-xs text-slate-500">Last run: {lastRun.toLocaleTimeString()}</span>
-          ) : null}
+          <button type="button" className={autoMode ? 'btn-primary' : 'btn-secondary'} onClick={() => saveSchedule(!autoMode)}>
+            Auto Mode {autoMode ? 'ON' : 'OFF'}
+          </button>
+          <input className="field w-28" type="number" min="1" max="168" value={intervalHours} onChange={(event) => setIntervalHours(Number(event.target.value))} />
+          <button type="button" className="btn-secondary" onClick={() => saveSchedule(autoMode)}>
+            Save Interval
+          </button>
+          {scheduleQuery.data?.next_run ? <span className="text-sm text-slate-400">Next run: {scheduleQuery.data.next_run}</span> : null}
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {TASKS.map((task) => {
-          const state = taskStates[task.id]
-          const isSelected = selected.has(task.id)
+      <div className="panel p-5">
+        {pipeline.isRunning ? (
+          <>
+            <div className="flex items-center justify-between text-sm text-cyan-300">
+              <span>Running - {pipeline.currentTask || 'Starting pipeline'}</span>
+              <span>{pipeline.progress}%</span>
+            </div>
+            <div className="mt-3 h-3 rounded-full bg-slate-900">
+              <div className="h-3 rounded-full bg-cyan-500 transition-all" style={{ width: `${pipeline.progress}%` }} />
+            </div>
+          </>
+        ) : pipeline.lastRun ? (
+          <p className="text-sm text-slate-300">
+            Pipeline completed in {pipeline.lastRun.duration_ms || 0}ms - {pipeline.lastRun.passed || 0} passed, {pipeline.lastRun.failed || 0} failed
+          </p>
+        ) : (
+          <p className="text-sm text-slate-400">No pipeline run recorded yet.</p>
+        )}
+      </div>
 
+      <div className="grid gap-4 md:grid-cols-2">
+        {TASKS.map(([id, label]) => {
+          const state = pipeline.taskStatuses[id]
+          const status = state?.status || 'waiting'
           return (
-            <button
-              key={task.id}
-              type="button"
-              onClick={() => {
-                if (!running) toggleSelect(task.id)
-              }}
-              className={`panel relative p-5 text-left transition ${
-                isSelected ? 'border-blue-500/40 bg-blue-950/20' : 'border-border'
-              } ${running && state.status === STATUS.idle ? 'opacity-60' : ''}`}
-            >
-              <span
-                className={`absolute right-4 top-4 flex h-5 w-5 items-center justify-center rounded border text-[11px] ${
-                  isSelected ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-600 text-transparent'
-                }`}
-              >
-                ✓
-              </span>
-
-              <div className="text-2xl">{task.icon}</div>
-              <p className="mt-3 text-sm font-semibold text-slate-100">{task.label}</p>
-              <p className="mt-2 text-xs text-slate-500">{task.description}</p>
-
-              <div className="mt-4 flex items-center gap-2">
-                <span className={`font-mono text-sm ${statusClasses[state.status]}`}>{statusIcons[state.status]}</span>
-                <span className={`text-xs ${statusClasses[state.status]}`}>
-                  {state.status === STATUS.running
-                    ? 'Running...'
-                    : state.status === STATUS.idle
-                      ? 'Waiting'
-                      : state.status === STATUS.skip
-                        ? 'Skipped'
-                        : state.detail || state.status}
+            <div key={id} className="panel p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-slate-100">{label}</p>
+                  <p className="mt-2 text-sm text-slate-400">{state?.summary || 'Waiting'}</p>
+                </div>
+                <span className={`text-xs font-semibold uppercase ${status === 'success' ? 'text-emerald-400' : status === 'failed' ? 'text-red-400' : status === 'running' ? 'text-cyan-300' : 'text-slate-500'}`}>
+                  {status}
                 </span>
-                {state.ms > 0 ? <span className="ml-auto text-[11px] text-slate-500">{state.ms}ms</span> : null}
               </div>
-
-              {state.detail ? (
-                <p className={`mt-3 text-xs ${statusClasses[state.status]}`}>{state.detail}</p>
-              ) : null}
-
-              {state.status === STATUS.error && state.error ? (
-                <div className="mt-3 inline-flex rounded-full bg-red-500/15 px-3 py-1 text-xs text-red-300">
-                  {state.error}
-                </div>
-              ) : null}
-
-              {state.status === STATUS.running ? (
-                <div className="mt-3 h-1 overflow-hidden rounded-full bg-slate-800">
-                  <div className="autopilot-progress h-full w-2/3 bg-blue-500" />
-                </div>
-              ) : null}
-            </button>
+              <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
+                <span>{state?.duration ? `${state.duration}ms` : 'Idle'}</span>
+                <button type="button" className="btn-secondary" onClick={() => runTask(id)} disabled={pipeline.isRunning || busyTask === id}>
+                  Run
+                </button>
+              </div>
+            </div>
           )
         })}
-      </div>
-
-      <div className="panel overflow-hidden">
-        <div className="flex items-center justify-between border-b border-border px-5 py-3">
-          <p className="section-title">Live Log</p>
-          <button type="button" className="text-xs text-slate-500 hover:text-slate-300" onClick={() => setLog([])}>
-            Clear
-          </button>
-        </div>
-        <div ref={logRef} className="h-64 overflow-y-auto bg-slate-950/50 px-5 py-4 font-mono text-xs leading-7">
-          {log.length ? null : <p className="text-slate-600">Press &quot;Run All Now&quot; to start.</p>}
-          {log.map((entry, index) => (
-            <div
-              key={`${entry.ts}-${index}`}
-              className={
-                entry.type === 'ok'
-                  ? 'text-emerald-400'
-                  : entry.type === 'err'
-                    ? 'text-red-400'
-                    : entry.type === 'start'
-                      ? 'text-blue-300'
-                      : 'text-slate-400'
-              }
-            >
-              <span className="mr-3 text-slate-600">{entry.ts}</span>
-              {entry.message}
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   )

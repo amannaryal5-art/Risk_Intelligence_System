@@ -10,7 +10,7 @@ import { useAuthStore } from '../store/authStore'
 export default function FeedStatus() {
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
-  const [draft, setDraft] = useState({ alienvault_otx: '', abuseipdb: '', virustotal: '' })
+  const [draft, setDraft] = useState({ alienvault_otx: '', abuseipdb: '', virustotal: '', urlscan: '' })
   const feedsQuery = useQuery({ queryKey: ['feeds', 'status', 'page'], queryFn: getFeedsStatus })
   const probeMutation = useMutation({
     mutationFn: probeFeeds,
@@ -37,7 +37,14 @@ export default function FeedStatus() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {(feedsQuery.data?.feeds || []).map((feed) => {
-          const status = feed.auth_valid ? 'live' : feed.reachable ? 'degraded' : 'offline'
+          const status =
+            feed.status === 'rate_limited'
+              ? 'degraded'
+              : feed.auth_valid
+                ? 'live'
+                : feed.reachable
+                  ? 'degraded'
+                  : 'offline'
           return (
             <div key={feed.name} className="panel p-5">
               <div className="flex items-center justify-between">
@@ -45,13 +52,14 @@ export default function FeedStatus() {
                 <FeedDot status={status} className="h-3 w-3" />
               </div>
               <div className="mt-4 space-y-2 text-sm text-slate-300">
-                <p>Configured: {String(feed.configured)}</p>
+                <p>Configured: {feed.configured === true ? 'true' : feed.configured === false ? 'false' : '—'}</p>
+                <p>Status: {feed.status || '—'}</p>
                 <p>Reachable: {String(feed.reachable)}</p>
                 <p>Auth valid: {String(feed.auth_valid)}</p>
                 <p>Latency: {feed.latency_ms != null ? `${feed.latency_ms} ms` : '—'}</p>
                 <p>HTTP status: {feed.http_status ?? '—'}</p>
                 <p>Last checked: {formatDate(feed.last_checked)}</p>
-                {feed.error ? <p className="text-red-400">{feed.error}</p> : null}
+                {feed.warning ? <p className={feed.name === 'urlscan' ? 'text-amber-400' : 'text-red-400'}>{feed.warning}</p> : null}
               </div>
             </div>
           )
@@ -65,6 +73,7 @@ export default function FeedStatus() {
             <input className="field" placeholder="AlienVault OTX key" value={draft.alienvault_otx} onChange={(event) => setDraft((current) => ({ ...current, alienvault_otx: event.target.value }))} />
             <input className="field" placeholder="AbuseIPDB key" value={draft.abuseipdb} onChange={(event) => setDraft((current) => ({ ...current, abuseipdb: event.target.value }))} />
             <input className="field" placeholder="VirusTotal key" value={draft.virustotal} onChange={(event) => setDraft((current) => ({ ...current, virustotal: event.target.value }))} />
+            <input className="field" placeholder="URLScan.io key" value={draft.urlscan} onChange={(event) => setDraft((current) => ({ ...current, urlscan: event.target.value }))} />
             <button type="button" className="btn-primary" disabled={configMutation.isPending} onClick={() => configMutation.mutate()}>
               {configMutation.isPending ? <Spinner /> : null}
               Save Feed Keys

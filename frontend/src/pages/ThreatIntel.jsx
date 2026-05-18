@@ -1,62 +1,89 @@
 import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
-import { getThreatIntel } from '../api/threatIntel'
-import { extractIOCs } from '../lib/utils'
-import IOCResultTable from '../components/shared/IOCResultTable'
-import QuickIOCLookup from '../components/shared/QuickIOCLookup'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import client from '../api/client'
 import Spinner from '../components/ui/Spinner'
-
-function parseList(value) {
-  return value.split(',').map((item) => item.trim()).filter(Boolean)
-}
+import QuickIOCLookup from '../components/shared/QuickIOCLookup'
 
 export default function ThreatIntel() {
-  const [rawText, setRawText] = useState('')
-  const [manual, setManual] = useState({ urls: '', domains: '', ips: '', hashes: '' })
-  const [liveFeeds, setLiveFeeds] = useState(true)
-  const extracted = extractIOCs(rawText)
+  const queryClient = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const scan = useMutation({
-    mutationFn: () => getThreatIntel({
-      text: rawText || undefined,
-      urls: [...new Set([...extracted.urls, ...parseList(manual.urls)])],
-      domains: [...new Set([...extracted.domains, ...parseList(manual.domains)])],
-      ips: [...new Set([...extracted.ips, ...parseList(manual.ips)])],
-      hashes: [...new Set([...extracted.hashes, ...parseList(manual.hashes)])],
-      live_feeds: liveFeeds,
-    }),
-    onError: (error) => toast.error(error.response?.data?.detail || 'Threat intel scan failed'),
+  const summaryQuery = useQuery({
+    queryKey: ['threat-intel', 'summary'],
+    queryFn: async () => (await client.get('/api/threat-intel/iocs/summary')).data,
   })
+
+  const iocsQuery = useQuery({
+    queryKey: ['threat-intel', 'iocs', search],
+    queryFn: async () => (await client.get('/api/threat-intel/iocs', { params: { page: 1, limit: 50, search } })).data,
+  })
+
+  const pullIocs = async () => {
+    setLoading(true)
+    try {
+      await client.post('/api/threat-intel/auto-pull')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['threat-intel', 'summary'] }),
+        queryClient.invalidateQueries({ queryKey: ['threat-intel', 'iocs'] }),
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const summary = summaryQuery.data
+  const rows = iocsQuery.data?.results || []
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="panel p-5">
-          <p className="section-title">IOC Input</p>
-          <textarea className="field mt-4 min-h-40" value={rawText} onChange={(event) => setRawText(event.target.value)} placeholder="Paste text to auto-extract domains, IPs, URLs, and hashes" />
-          <div className="mt-4 grid gap-3">
-            <input className="field" placeholder="Manual URLs, comma separated" value={manual.urls} onChange={(event) => setManual((current) => ({ ...current, urls: event.target.value }))} />
-            <input className="field" placeholder="Manual domains, comma separated" value={manual.domains} onChange={(event) => setManual((current) => ({ ...current, domains: event.target.value }))} />
-            <input className="field" placeholder="Manual IPs, comma separated" value={manual.ips} onChange={(event) => setManual((current) => ({ ...current, ips: event.target.value }))} />
-            <input className="field" placeholder="Manual hashes, comma separated" value={manual.hashes} onChange={(event) => setManual((current) => ({ ...current, hashes: event.target.value }))} />
-          </div>
-          <div className="mt-4 flex items-center justify-between">
-            <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={liveFeeds} onChange={(event) => setLiveFeeds(event.target.checked)} />Use live feeds</label>
-            <button type="button" className="btn-primary" disabled={scan.isPending} onClick={() => scan.mutate()}>
-              {scan.isPending ? <Spinner /> : null}
-              Analyze IOCs
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="section-title">IOC Database</p>
+            <button type="button" className="btn-primary" disabled={loading} onClick={pullIocs}>
+              {loading ? <Spinner /> : null}
+              Auto-Pull Latest IOCs
             </button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4 text-sm text-slate-300">
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">Total IOCs: {summary?.total || 0}</div>
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">IPs: {summary?.by_type?.ip || 0}</div>
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">Domains: {summary?.by_type?.domain || 0}</div>
+            <div className="rounded-xl border border-border bg-slate-950/50 p-4">Hashes: {summary?.by_type?.hash || 0}</div>
+          </div>
+          <input className="field mt-4" placeholder="Search IOC value" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <div className="mt-4 overflow-hidden rounded-2xl border border-border">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-slate-950/80 text-slate-400">
+                <tr>
+                  <th className="px-4 py-3">IOC Value</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Source</th>
+                  <th className="px-4 py-3">Confidence</th>
+                  <th className="px-4 py-3">Added</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-t border-border bg-surface/70">
+                    <td className="px-4 py-3 font-mono text-slate-200">{row.value}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.type}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.source}</td>
+                    <td className="px-4 py-3 text-slate-300">{row.confidence}</td>
+                    <td className="px-4 py-3 text-slate-500">{row.updated_at}</td>
+                  </tr>
+                ))}
+                {!rows.length ? (
+                  <tr>
+                    <td colSpan="5" className="px-4 py-8 text-center text-slate-500">No IOC rows returned yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
         </div>
         <QuickIOCLookup />
-      </div>
-
-      <div className="panel p-5">
-        <p className="section-title">Results</p>
-        <div className="mt-4">
-          <IOCResultTable data={scan.data} />
-        </div>
       </div>
     </div>
   )

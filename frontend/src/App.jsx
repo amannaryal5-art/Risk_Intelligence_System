@@ -4,11 +4,8 @@ import { useAuthStore } from './store/authStore'
 import Shell from './components/layout/Shell'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Analyze from './pages/Analyze'
-import ThreatIntel from './pages/ThreatIntel'
-import WebsiteIntel from './pages/WebsiteIntel'
-import MalwareAnalysis from './pages/MalwareAnalysis'
-import FusionScan from './pages/FusionScan'
+import Intelligence from './pages/Intelligence'
+import DeviceScan from './pages/DeviceScan'
 import Cases from './pages/Cases'
 import CaseDetail from './pages/CaseDetail'
 import ARIA from './pages/ARIA'
@@ -28,11 +25,13 @@ function ProtectedLayout() {
       <motion.div key={location.pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mx-auto w-full max-w-[1600px]">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/analyze" element={<Analyze />} />
-          <Route path="/threat-intel" element={<ThreatIntel />} />
-          <Route path="/website-intel" element={<WebsiteIntel />} />
-          <Route path="/malware" element={<MalwareAnalysis />} />
-          <Route path="/fusion-scan" element={<FusionScan />} />
+          <Route path="/intelligence" element={<Intelligence />} />
+          <Route path="/device" element={<DeviceScan />} />
+          <Route path="/analyze" element={<Navigate to="/intelligence" replace />} />
+          <Route path="/threat-intel" element={<Navigate to="/intelligence" replace />} />
+          <Route path="/website-intel" element={<Navigate to="/intelligence" replace />} />
+          <Route path="/malware" element={<Navigate to="/intelligence" replace />} />
+          <Route path="/fusion-scan" element={<Navigate to="/intelligence" replace />} />
           <Route path="/cases" element={<Cases />} />
           <Route path="/cases/:id" element={<CaseDetail />} />
           <Route path="/aria" element={<ARIA />} />

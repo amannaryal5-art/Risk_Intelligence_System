@@ -20,20 +20,25 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 if __package__:
+    from .automation_service import AutomationService
     from .cyber_fusion import CyberFusionEngine
     from .enterprise import AuthManager, CaseStore, UserContext
     from .risk_engine import RiskEngine
     from .scamcheck import ScamCheckCacheStore, ScamCheckService
+    from .scheduler_service import SchedulerService
     from .threat_intel import ThreatIntelEngine
 else:
+    from automation_service import AutomationService
     from cyber_fusion import CyberFusionEngine
     from enterprise import AuthManager, CaseStore, UserContext
     from risk_engine import RiskEngine
     from scamcheck import ScamCheckCacheStore, ScamCheckService
+    from scheduler_service import SchedulerService
     from threat_intel import ThreatIntelEngine
 
 
@@ -141,6 +146,47 @@ class FeedConfigRequest(BaseModel):
     alienvault_otx: Optional[str] = None
     abuseipdb: Optional[str] = None
     virustotal: Optional[str] = None
+    urlscan: Optional[str] = None
+
+
+class AutoScheduleRequest(BaseModel):
+    enabled: bool
+    interval_hours: int = Field(default=6, ge=1, le=168)
+
+
+class AutoAssetRequest(BaseModel):
+    name: str
+    type: str
+    value: str
+    scan_interval_hours: int = 6
+
+
+class AriaChatRequest(BaseModel):
+    message: Optional[str] = None
+    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+    messages: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class UnifiedScanRequest(BaseModel):
+    target: str = Field(..., min_length=1)
+    targetType: str = Field(default="auto")
+    context: Optional[str] = None
+    engines: Dict[str, bool] = Field(default_factory=dict)
+
+
+class DeviceScheduleRequest(BaseModel):
+    enabled: bool
+    intervalMinutes: int = Field(default=360, ge=5, le=10080)
+
+
+class DeviceKillRequest(BaseModel):
+    pid: int
+    sessionId: str = Field(..., min_length=1)
+
+
+class DeviceBlockRequest(BaseModel):
+    ip: str = Field(..., min_length=7, max_length=45)
+    reason: str = Field(default="", max_length=500)
 
 
 # ─────────────────────────────────────────────────────
@@ -195,6 +241,65 @@ auth_manager = AuthManager()
 case_store = CaseStore(DATA_DIR / "riskintel.db")
 scamcheck_cache = ScamCheckCacheStore(DATA_DIR / "riskintel.db")
 scamcheck_service = ScamCheckService(threat_intel_engine, engine, scamcheck_cache)
+automation_service = AutomationService(
+    DATA_DIR / "riskintel.db",
+    case_store=case_store,
+    audit_writer=case_store.audit,
+    risk_engine=engine,
+    threat_intel_engine=threat_intel_engine,
+    fusion_engine=fusion_engine,
+)
+scheduler_service = SchedulerService(
+    automation_service.get_setting,
+    automation_service.upsert_setting,
+    lambda: automation_service.run_full_pipeline(),
+)
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: E402
+from apscheduler.triggers.interval import IntervalTrigger  # noqa: E402
+
+_device_scan_scheduler = AsyncIOScheduler()
+_DEVICE_SCAN_JOB_ID = "crie_device_scan"
+
+
+async def configure_device_scan_schedule(enabled: bool, interval_minutes: int) -> Dict[str, Any]:
+    if not _device_scan_scheduler.running:
+        _device_scan_scheduler.start()
+    if _device_scan_scheduler.get_job(_DEVICE_SCAN_JOB_ID):
+        _device_scan_scheduler.remove_job(_DEVICE_SCAN_JOB_ID)
+    next_run = None
+    if enabled:
+
+        async def _fire_device_scan() -> None:
+            await automation_service.start_device_scan("SYSTEM", "scheduled")
+
+        _device_scan_scheduler.add_job(
+            _fire_device_scan,
+            IntervalTrigger(minutes=interval_minutes),
+            id=_DEVICE_SCAN_JOB_ID,
+            replace_existing=True,
+        )
+        job = _device_scan_scheduler.get_job(_DEVICE_SCAN_JOB_ID)
+        next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+    config = {"enabled": enabled, "intervalMinutes": interval_minutes, "next_run": next_run}
+    await automation_service.upsert_setting("device_scan_schedule", config)
+    return config
+
+
+async def restore_device_scan_schedule() -> Dict[str, Any]:
+    config = automation_service.get_setting("device_scan_schedule", {"enabled": False, "intervalMinutes": 360})
+    return await configure_device_scan_schedule(bool(config.get("enabled")), int(config.get("intervalMinutes") or 360))
+
+
+async def trigger_login_auto_scans(user_id: str) -> None:
+    try:
+        await asyncio.gather(
+            automation_service.start_device_scan(user_id, "login_auto"),
+            automation_service.start_system_scan(user_id),
+            return_exceptions=True,
+        )
+    except Exception:
+        logger.exception("Auto-scan failed for user %s", user_id)
 
 app = FastAPI(
     title="Risk Intelligence System",
@@ -553,19 +658,17 @@ def _build_website_scan_result(input_url: str) -> Dict[str, Any]:
     }
 
 
+automation_service.website_scan_builder = _build_website_scan_result
+
+
 async def refresh_feed_status_cache() -> Dict[str, Any]:
     global _feed_status_cache
-    configs = _build_feed_configs()
-    results = await asyncio.gather(*[_probe_feed(name, config) for name, config in configs.items()])
+    results = await automation_service.probe_live_feeds()
+    normalized = [automation_service.normalize_feed_record(dict(feed)) for feed in results["feeds"]]
     _feed_status_cache = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "feeds": results,
-        "summary": {
-            "configured": sum(1 for item in results if item.get("configured")),
-            "reachable": sum(1 for item in results if item.get("reachable")),
-            "auth_valid": sum(1 for item in results if item.get("auth_valid")),
-            "total": len(results),
-        },
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "feeds": normalized,
+        "summary": automation_service.feed_summary(),
     }
     return _feed_status_cache
 
@@ -681,6 +784,7 @@ async def startup_diagnostics() -> None:
         ("OTX_API_KEY", "RISKINTEL_OTX_API_KEY"),
         ("ABUSEIPDB_API_KEY", "RISKINTEL_ABUSEIPDB_API_KEY"),
         ("VIRUSTOTAL_API_KEY", "RISKINTEL_VT_API_KEY"),
+        ("URLSCAN_API_KEY", "RISKINTEL_URLSCAN_API_KEY"),
     ):
         env_key = env_names[0]
         value = _feed_env(*env_names)
@@ -703,12 +807,16 @@ async def startup_diagnostics() -> None:
             logger.warning("Feed probe attempt %d/3 failed: %s", attempt, exc)
             if attempt < 3:
                 await asyncio.sleep(5)
+    await scheduler_service.restore()
+    await restore_device_scan_schedule()
     logger.info("=====================================")
 
 
 @app.get("/api/v1/live-feeds/status")
 async def live_feeds_status(probe: bool = False) -> dict:
-    return threat_intel_engine.build_live_feed_status(probe=probe)
+    if probe or not automation_service.get_feed_status():
+        await refresh_feed_status_cache()
+    return {"generated_at": datetime.utcnow().isoformat() + "Z", "feeds": automation_service.get_feed_status(), "summary": automation_service.feed_summary()}
 
 
 @app.get("/api/v1/feeds/probe")
@@ -729,18 +837,17 @@ async def feeds_live_status(
 
 @app.websocket("/api/v1/ws/feeds/status")
 async def feeds_status_ws(websocket: WebSocket) -> None:
-    await websocket.accept()
+    await automation_service.ws_hub.connect(websocket)
     try:
+        if _feed_status_cache.get("feeds"):
+            await websocket.send_json({"type": "feed_status", "timestamp": _feed_status_cache.get("timestamp"), "data": _feed_status_cache})
+        latest = automation_service.last_pipeline_run()
+        if latest:
+            await websocket.send_json({"type": "pipeline_snapshot", "data": latest})
         while True:
-            payload = await refresh_feed_status_cache()
-            await websocket.send_json({
-                "type": "feed_status",
-                "timestamp": payload.get("timestamp"),
-                "data": payload,
-            })
-            await asyncio.sleep(30)
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        return
+        await automation_service.ws_hub.disconnect(websocket)
 
 
 @app.post("/api/v1/feeds/configure", dependencies=[Depends(require_roles("admin"))])
@@ -756,6 +863,7 @@ async def configure_feeds(payload: FeedConfigRequest, user: UserContext = Depend
         "alienvault_otx": "OTX_API_KEY",
         "abuseipdb": "ABUSEIPDB_API_KEY",
         "virustotal": "VIRUSTOTAL_API_KEY",
+        "urlscan": "URLSCAN_API_KEY",
     }
     updates = {key_map[k]: v.strip() for k, v in payload.model_dump().items() if v and k in key_map}
     new_lines: List[str] = []
@@ -787,9 +895,42 @@ async def configure_feeds(payload: FeedConfigRequest, user: UserContext = Depend
     return {"status": "ok", "updated": sorted(updates.keys())}
 
 
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    return automation_service.dashboard_stats(user.username)
+
+
+@app.get("/api/dashboard/risk-trend")
+async def dashboard_risk_trend(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> List[Dict[str, Any]]:
+    trend = automation_service.intelligence_risk_trend(user.username, hours=24 * 7)
+    return trend or automation_service.risk_trend(hours=24 * 7, limit=20)
+
+
+@app.get("/api/feeds/status")
+async def feeds_status_db(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> List[Dict[str, Any]]:
+    if not automation_service.get_feed_status():
+        await refresh_feed_status_cache()
+    return automation_service.get_feed_status()
+
+
+@app.post("/api/feeds/probe-all")
+async def feeds_probe_all(user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    return await refresh_feed_status_cache()
+
+
 @app.get("/api/v1/auth/whoami")
 async def whoami(user: UserContext = Depends(get_current_user)) -> dict:
-    return {"authenticated": user.authenticated, "username": user.username, "role": user.role, "api_key_hash": user.api_key_hash}
+    scans_initiated: List[str] = []
+    if user.authenticated:
+        scans_initiated = ["device", "intelligence"]
+        asyncio.create_task(trigger_login_auto_scans(user.username))
+    return {
+        "authenticated": user.authenticated,
+        "username": user.username,
+        "role": user.role,
+        "api_key_hash": user.api_key_hash,
+        "scansInitiated": scans_initiated,
+    }
 
 
 # ─────────────────────────────────────────────────────
@@ -1147,200 +1288,529 @@ async def list_audits(limit: int = 100, user: UserContext = Depends(get_current_
     case_store.audit(user.username, user.role, "list_audit_logs", "audit", meta={"count": len(rows)})
     return {"count": len(rows), "results": rows}
 
-import asyncio as _asyncio
-import sys as _sys
-import os as _os
-from pathlib import Path as _Path
-from pydantic import BaseModel as _BaseModel
-from typing import List as _List, Optional as _Optional
-
-_sys.path.insert(0, str(_Path(__file__).parent))
-
-from asset_monitor import db as _db, run_monitoring_cycle, run_daily_report, scan_asset as _scan_asset
-from ai_engine import chat as _ai_chat, summarize_asset as _summarize_asset
-
-try:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler as _Scheduler
-    _scheduler = _Scheduler()
-    _SCHEDULER_OK = True
-except ImportError:
-    _SCHEDULER_OK = False
-    _scheduler = None
-
-
-@app.on_event("startup")
-async def _aria_startup():
-    if _os.getenv("VERCEL"):
-        import logging
-        logging.getLogger("uvicorn.error").info("ARIA scheduler disabled on Vercel serverless runtime")
-        return
-    if _SCHEDULER_OK and _scheduler:
-        _scheduler.add_job(
-            run_monitoring_cycle, "interval", minutes=10, id="aria_monitor"
-        )
-        _scheduler.add_job(
-            run_daily_report, "cron", hour=8, minute=0, id="aria_daily_report"
-        )
-        _scheduler.start()
-        import logging
-        logging.getLogger("aria").info("ARIA scheduler started")
-        logging.getLogger("uvicorn.error").info("ARIA scheduler started")
-    _asyncio.create_task(run_monitoring_cycle())
-
-
 @app.on_event("shutdown")
-async def _aria_shutdown():
-    if _SCHEDULER_OK and _scheduler and _scheduler.running:
-        _scheduler.shutdown(wait=False)
+async def _automation_shutdown():
+    scheduler_service.shutdown()
+    if _device_scan_scheduler.running:
+        _device_scan_scheduler.shutdown(wait=False)
 
 
-class _AddAsset(_BaseModel):
-    name: str
-    type: str
-    value: str
-    scan_interval_hours: int = 6
+@app.post("/api/autopilot/run-all", status_code=202)
+async def autopilot_run_all(user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    run_id = automation_service.create_pipeline_run()
+    asyncio.create_task(automation_service.run_full_pipeline(run_id))
+    return {"run_id": run_id}
 
 
-class _ChatMessage(_BaseModel):
-    role: str
-    content: str
+@app.get("/api/autopilot/status/{run_id}")
+async def autopilot_status(run_id: str, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = automation_service.pipeline_status(run_id)
+    if not payload:
+        raise HTTPException(404, "Pipeline run not found")
+    return payload
 
 
-class _ChatRequest(_BaseModel):
-    messages: _List[_ChatMessage]
+@app.get("/api/autopilot/last-run")
+async def autopilot_last_run(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = automation_service.last_pipeline_run()
+    if not payload:
+        raise HTTPException(404, "No pipeline runs yet")
+    return payload
 
 
+@app.post("/api/autopilot/run-task/{task_name}", status_code=202)
+async def autopilot_run_task(task_name: str, user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    run_id = automation_service.create_pipeline_run(task_name)
+    asyncio.create_task(automation_service.run_full_pipeline(run_id, single_task=task_name))
+    return {"run_id": run_id}
+
+
+@app.post("/api/autopilot/schedule")
+async def autopilot_schedule(body: AutoScheduleRequest, user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    config = await scheduler_service.configure(body.enabled, body.interval_hours)
+    return {"enabled": config["enabled"], "interval_hours": config["interval_hours"], "next_run": config["next_run"]}
+
+
+@app.get("/api/autopilot/schedule")
+async def autopilot_get_schedule(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    config = scheduler_service.load()
+    return config
+
+
+@app.post("/api/intelligence/unified-scan")
+async def intelligence_unified_scan(
+    body: UnifiedScanRequest,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    return await automation_service.unified_scan(
+        body.target,
+        body.targetType,
+        context=body.context,
+        user_id=user.username,
+        engines=body.engines or None,
+    )
+
+
+@app.post("/api/intelligence/system-scan", status_code=202)
+async def intelligence_system_scan(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    session_id = await automation_service.start_system_scan(user.username)
+    return {"session_id": session_id, "status": "running"}
+
+
+@app.get("/api/intelligence/last-session")
+async def intelligence_last_session(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    session = automation_service.last_intelligence_session(user.username)
+    if not session:
+        raise HTTPException(404, "No intelligence session found")
+    return session
+
+
+@app.post("/api/device/scan", status_code=202)
+async def device_scan_start(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    session_id = await automation_service.start_device_scan(user.username, "manual")
+    return {"sessionId": session_id, "status": "started", "message": "Device scan initiated"}
+
+
+@app.get("/api/device/scan/latest")
+async def device_scan_latest(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    session = automation_service.last_device_session(user.username)
+    if not session:
+        raise HTTPException(404, "No device scan session found")
+    sid = session["id"]
+    return {
+        **session,
+        "connections": automation_service.device_list_connections(sid, page=1, limit=500)["items"],
+        "processes": automation_service.device_list_processes(sid, page=1, limit=500)["items"],
+        "ports": automation_service.device_list_ports(sid, page=1, limit=500)["items"],
+        "software": automation_service.device_list_software(sid, page=1, limit=500)["items"],
+        "startup": automation_service.device_list_startup(sid, page=1, limit=500)["items"],
+    }
+
+
+@app.get("/api/device/scan/history")
+async def device_scan_history(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> List[Dict[str, Any]]:
+    return automation_service.device_scan_history(30)
+
+
+@app.get("/api/device/scan/{session_id}/connections")
+async def device_scan_connections(
+    session_id: str,
+    page: int = 1,
+    limit: int = 20,
+    is_flagged: Optional[bool] = None,
+    verdict: Optional[str] = None,
+    process_name: Optional[str] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    filters: Dict[str, Any] = {}
+    if is_flagged is not None:
+        filters["is_flagged"] = is_flagged
+    if verdict:
+        filters["verdict"] = verdict
+    if process_name:
+        filters["process_name"] = process_name
+    return automation_service.device_list_connections(session_id, page=page, limit=min(limit, 100), filters=filters)
+
+
+@app.get("/api/device/scan/{session_id}/processes")
+async def device_scan_processes(
+    session_id: str,
+    page: int = 1,
+    limit: int = 20,
+    is_flagged: Optional[bool] = None,
+    verdict: Optional[str] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    filters: Dict[str, Any] = {}
+    if is_flagged is not None:
+        filters["is_flagged"] = is_flagged
+    if verdict:
+        filters["verdict"] = verdict
+    return automation_service.device_list_processes(session_id, page=page, limit=min(limit, 100), filters=filters)
+
+
+@app.get("/api/device/scan/{session_id}/ports")
+async def device_scan_ports(
+    session_id: str,
+    page: int = 1,
+    limit: int = 20,
+    is_flagged: Optional[bool] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    filters: Dict[str, Any] = {}
+    if is_flagged is not None:
+        filters["is_flagged"] = is_flagged
+    return automation_service.device_list_ports(session_id, page=page, limit=min(limit, 100), filters=filters)
+
+
+@app.get("/api/device/scan/{session_id}/software")
+async def device_scan_software(
+    session_id: str,
+    page: int = 1,
+    limit: int = 20,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    return automation_service.device_list_software(session_id, page=page, limit=min(limit, 100))
+
+
+@app.get("/api/device/scan/{session_id}/startup")
+async def device_scan_startup(
+    session_id: str,
+    page: int = 1,
+    limit: int = 20,
+    is_flagged: Optional[bool] = None,
+    verdict: Optional[str] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+) -> dict:
+    filters: Dict[str, Any] = {}
+    if is_flagged is not None:
+        filters["is_flagged"] = is_flagged
+    if verdict:
+        filters["verdict"] = verdict
+    return automation_service.device_list_startup(session_id, page=page, limit=min(limit, 100), filters=filters)
+
+
+@app.get("/api/device/test")
+async def device_test(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    """Sanity check: built-in OS facts without shell collectors."""
+    from .device_scan_agent import get_builtin_system_info
+
+    info = get_builtin_system_info()
+    ram_gb = info.get("ram_total_gb")
+    return {
+        "hostname": info.get("hostname"),
+        "platform": info.get("platform"),
+        "user": info.get("current_user"),
+        "ram": int(ram_gb * 1024**3) if ram_gb else None,
+    }
+
+
+@app.get("/api/device/sysinfo")
+async def device_sysinfo(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    return automation_service.device_sysinfo(user.username)
+
+
+@app.post("/api/device/process/kill")
+async def device_process_kill(body: DeviceKillRequest, user: UserContext = Depends(require_roles("admin"))) -> dict:
+    from .device_scan_agent import run_exec, validate_kill_pid
+
+    if not validate_kill_pid(body.pid):
+        raise HTTPException(400, "pid must be a positive integer below 1000000")
+    import sys
+
+    if sys.platform == "win32":
+        code, out, err = await asyncio.to_thread(run_exec, "taskkill", ["/PID", str(body.pid), "/F"])
+    else:
+        code, out, err = await asyncio.to_thread(run_exec, "kill", ["-9", str(body.pid)])
+    case_store.audit(user.username, user.role, "kill_process", "host", str(body.pid), {"session_id": body.sessionId})
+    if code != 0:
+        raise HTTPException(500, err or out or "Failed to terminate process")
+    return {"success": True, "message": f"Process {body.pid} terminated"}
+
+
+@app.post("/api/device/ip/block")
+async def device_ip_block(body: DeviceBlockRequest, user: UserContext = Depends(require_roles("admin"))) -> dict:
+    from .device_scan_agent import run_exec, validate_ipv4_block
+
+    if not validate_ipv4_block(body.ip):
+        raise HTTPException(400, "ip must be a valid IPv4 address")
+    import sys
+
+    if sys.platform == "win32":
+        rule = f"CRIE-Block-{body.ip.replace('.', '-')}"
+        code, out, err = await asyncio.to_thread(
+            run_exec,
+            "netsh",
+            ["advfirewall", "firewall", "add", "rule", f"name={rule}", "dir=out", "action=block", f"remoteip={body.ip}"],
+        )
+    else:
+        code, out, err = await asyncio.to_thread(run_exec, "iptables", ["-A", "OUTPUT", "-d", body.ip, "-j", "DROP"])
+    case_store.audit(user.username, user.role, "block_ip", "host", body.ip, {"reason": body.reason})
+    if code != 0:
+        raise HTTPException(500, err or out or "Failed to block IP")
+    return {"success": True, "message": f"Outbound traffic to {body.ip} blocked"}
+
+
+@app.post("/api/device/scan/schedule")
+async def device_scan_schedule(body: DeviceScheduleRequest, user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    config = await configure_device_scan_schedule(body.enabled, body.intervalMinutes)
+    case_store.audit(user.username, user.role, "device_scan_schedule", "settings", meta=config)
+    return config
+
+
+@app.get("/api/device/scan/schedule")
+async def device_scan_schedule_get(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    return automation_service.get_setting("device_scan_schedule", {"enabled": False, "intervalMinutes": 360, "next_run": None})
+
+
+@app.post("/api/device/software/sync", status_code=202)
+async def device_software_sync(user: UserContext = Depends(require_roles("admin", "analyst"))) -> dict:
+    from .device_scan_agent import run_device_scan_software_only
+
+    result = await run_device_scan_software_only(automation_service, user.username)
+    return {"status": "complete", **result}
+
+
+@app.get("/api/assets")
 @app.get("/api/aria/assets")
-async def aria_get_assets():
-    return _db.get_assets()
+async def aria_get_assets(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.list_assets()
 
 
+@app.post("/api/assets")
 @app.post("/api/aria/assets")
-async def aria_add_asset(body: _AddAsset):
+async def aria_add_asset(body: AutoAssetRequest, user: UserContext = Depends(require_roles("admin", "analyst"))):
     if body.type not in ("domain", "ip", "url", "email"):
         raise HTTPException(400, "type must be domain | ip | url | email")
-    pid = _db.add_asset(body.name, body.type, body.value, body.scan_interval_hours)
-    asset = _db.get_asset(pid)
+    asset_id = automation_service.add_asset(body.name.strip() or body.value.strip(), body.type, body.value.strip())
+    asset = automation_service.get_asset(asset_id)
     if asset:
-        _asyncio.create_task(_background_scan(pid, asset))
-    return {"id": pid, "status": "added", "message": "Asset added - scanning now"}
+        asyncio.create_task(automation_service.scan_asset(asset))
+    return {"id": asset_id, "status": "added", "message": "Asset added - scanning now"}
 
 
+@app.delete("/api/assets/{aid}")
 @app.delete("/api/aria/assets/{aid}")
-async def aria_delete_asset(aid: int):
-    _db.delete_asset(aid)
+async def aria_delete_asset(aid: int, user: UserContext = Depends(require_roles("admin", "analyst"))):
+    automation_service.delete_asset(aid)
     return {"status": "removed"}
 
 
 @app.post("/api/aria/assets/{aid}/scan")
-async def aria_scan_now(aid: int):
-    asset = _db.get_asset(aid)
+async def aria_scan_now(aid: int, user: UserContext = Depends(require_roles("admin", "analyst"))):
+    asset = automation_service.get_asset(aid)
     if not asset:
         raise HTTPException(404, "Asset not found")
-    _asyncio.create_task(_background_scan(aid, asset))
-    return {"status": "scanning", "message": "Scan started - results in ~15 seconds"}
+    asyncio.create_task(automation_service.scan_asset(asset))
+    return {"status": "scanning", "message": "Scan started"}
 
 
 @app.post("/api/aria/monitoring/run")
-async def aria_run_monitoring_cycle():
-    assets = _db.get_assets()
-    await run_monitoring_cycle()
-    return {
-        "status": "ok",
-        "scanned": len(assets),
-        "triggered_at": datetime.utcnow().isoformat(),
-    }
+async def aria_run_monitoring_cycle(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    result = await automation_service.run_aria_monitoring_cycle(rescan_all=True)
+    return {"status": "ok", **result, "triggered_at": datetime.utcnow().isoformat() + "Z"}
 
 
 @app.get("/api/aria/assets/{aid}/history")
-async def aria_asset_history(aid: int):
-    return _db.get_asset_history(aid)
+async def aria_asset_history(aid: int, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.asset_history(aid)
 
 
 @app.get("/api/aria/assets/{aid}/summary")
-async def aria_asset_summary(aid: int):
-    asset = _db.get_asset(aid)
+async def aria_asset_summary(aid: int, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    asset = automation_service.get_asset(aid)
     if not asset:
         raise HTTPException(404, "Asset not found")
-    history = _db.get_asset_history(aid)
-    summary = await _summarize_asset(asset["value"], history)
-    return {"summary": summary}
+    history = automation_service.asset_history(aid, limit=5)
+    return {"summary": f"{asset['label']} is currently {str(asset.get('risk_level', 'unscanned')).upper()} with score {asset['risk_score'] or 0}. {len(history)} snapshots recorded."}
 
 
-async def _background_scan(aid: int, asset: dict):
-    try:
-        ai_result, raw_data = await _scan_asset(asset)
-        _db.save_scan(aid, ai_result, raw_data)
-        _db.mark_scanned(aid)
-        if ai_result.get("risk_level") in ("Critical", "High"):
-            findings = ai_result.get("key_findings", [])
-            title = f"{ai_result['risk_level']} risk on {asset['value']}"
-            message = ai_result.get("summary", "")
-            if findings:
-                message += " | " + "; ".join(findings[:3])
-            _db.add_alert(aid, asset["value"], ai_result["risk_level"], title, message)
-    except Exception as e:
-        import logging
-        logging.getLogger("aria").error(f"Background scan failed for {asset['value']}: {e}")
+@app.post("/api/alerts/generate-from-scan")
+async def alerts_generate_from_scan(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    result = await automation_service.run_aria_monitoring_cycle(rescan_all=True)
+    return {"generated": sum(1 for item in result["results"] if item.get("alert")), "details": result}
 
 
-@app.post("/api/aria/chat")
-async def aria_chat(body: _ChatRequest):
-    context = _db.build_chat_context()
-    messages = [{"role": m.role, "content": m.content} for m in body.messages]
-    reply = await _ai_chat(messages, context)
-    return {"reply": reply}
-
-
-@app.get("/api/aria/stats")
-async def aria_stats():
-    assets = _db.get_assets()
-    return {
-        "total": len(assets),
-        "critical": sum(1 for a in assets if a.get("last_risk_level") == "Critical"),
-        "high": sum(1 for a in assets if a.get("last_risk_level") == "High"),
-        "medium": sum(1 for a in assets if a.get("last_risk_level") == "Medium"),
-        "low": sum(1 for a in assets if a.get("last_risk_level") == "Low"),
-        "clean": sum(1 for a in assets if a.get("last_risk_level") == "Clean"),
-        "unknown": sum(1 for a in assets if not a.get("last_risk_level")),
-        "unseen_alerts": _db.unseen_count(),
-    }
-
-
+@app.get("/api/alerts")
 @app.get("/api/aria/alerts")
-async def aria_get_alerts():
-    return _db.get_alerts()
+async def aria_get_alerts(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.list_alerts()
 
 
 @app.post("/api/aria/alerts/{aid}/seen")
-async def aria_mark_seen(aid: int):
-    _db.mark_seen(aid)
+async def aria_mark_seen(aid: int, user: UserContext = Depends(require_roles("admin", "analyst"))):
+    automation_service.mark_alert_seen(aid)
     return {"status": "ok"}
 
 
 @app.post("/api/aria/alerts/seen-all")
-async def aria_mark_all_seen():
-    _db.mark_all_seen()
+async def aria_mark_all_seen(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    automation_service.mark_all_alerts_seen()
     return {"status": "ok"}
 
 
+@app.post("/api/cases/auto-create-from-alerts")
+async def cases_auto_create(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    created = 0
+    for alert in automation_service.list_alerts(500):
+        if alert["severity"] in {"CRITICAL", "HIGH"} and not alert.get("case_id"):
+            if automation_service.auto_create_case_for_alert(alert):
+                created += 1
+    return {"cases_created": created}
+
+
+@app.get("/api/reports")
 @app.get("/api/aria/reports")
-async def aria_get_reports():
-    return _db.get_reports()
+async def aria_get_reports(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.list_reports()
 
 
+@app.get("/api/reports/{rid}")
 @app.get("/api/aria/reports/{rid}")
-async def aria_get_report(rid: int):
-    report = _db.get_report(rid)
+async def aria_get_report(rid: int, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    report = automation_service.get_report(rid)
     if not report:
         raise HTTPException(404, "Report not found")
     return report
 
 
+@app.post("/api/reports/generate")
 @app.post("/api/aria/reports/generate")
-async def aria_generate_report():
-    rid = await run_daily_report()
-    return {"id": rid, "status": "ok"}
+async def aria_generate_report(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    report = await automation_service.generate_daily_report()
+    return {"id": report["report_id"], "status": "ok"}
+
+
+@app.post("/api/analyze/text")
+async def analyze_text_auto(payload: AnalyzeRequest, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return await automation_service.analyze_text(payload.text, source="manual_text")
+
+
+@app.post("/api/analyze/auto-scan-all")
+async def analyze_auto_scan_all(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    return await automation_service.auto_scan_all_cases()
+
+
+@app.post("/api/threat-intel/auto-pull")
+async def threat_intel_auto_pull(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    return await automation_service.auto_pull_iocs()
+
+
+@app.get("/api/threat-intel/iocs")
+async def threat_intel_iocs(
+    page: int = 1,
+    limit: int = 50,
+    type: Optional[str] = None,
+    source: Optional[str] = None,
+    min_confidence: float = 0,
+    search: Optional[str] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst", "viewer")),
+):
+    return automation_service.list_iocs(page=page, limit=limit, ioc_type=type, source=source, min_confidence=min_confidence, search=search)
+
+
+@app.get("/api/threat-intel/iocs/summary")
+async def threat_intel_iocs_summary(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.ioc_summary()
+
+
+@app.post("/api/website-intel/auto-scan")
+async def website_intel_auto_scan(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    return await automation_service.auto_scan_domains()
+
+
+@app.get("/api/website-intel/recent-scans")
+async def website_intel_recent_scans(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.recent_website_scans()
+
+
+@app.get("/api/malware/auto-check-ioc-hashes")
+@app.post("/api/malware/auto-check-ioc-hashes")
+async def malware_auto_check(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    return await automation_service.auto_check_hashes()
+
+
+@app.get("/api/malware/recent-files")
+async def malware_recent_files(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.recent_files()
+
+
+@app.post("/api/fusion-scan/auto")
+async def fusion_scan_auto(user: UserContext = Depends(require_roles("admin", "analyst"))):
+    return await automation_service.auto_fusion()
+
+
+@app.post("/api/aria/chat")
+async def aria_chat(body: AriaChatRequest, user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    stats = automation_service.aria_stats()
+    assets = automation_service.list_assets()
+    top_asset = max(assets, key=lambda item: item["risk_score"] or 0) if assets else None
+    feed_summary = automation_service.feed_summary()
+    device_session = automation_service.last_device_session(user.username)
+    device_summary: Dict[str, Any] = {}
+    flagged_connections: List[Dict[str, Any]] = []
+    flagged_processes: List[Dict[str, Any]] = []
+    if device_session:
+        sid = device_session["id"]
+        device_summary = {
+            "risk_score": device_session.get("overall_risk_score"),
+            "hostname": device_session.get("hostname"),
+            "connections_flagged": device_session.get("connections_flagged"),
+            "processes_flagged": device_session.get("processes_flagged"),
+            "completed_at": device_session.get("completed_at"),
+        }
+        flagged_connections = automation_service.device_list_connections(
+            sid, page=1, limit=10, filters={"is_flagged": True}
+        )["items"]
+        flagged_processes = automation_service.device_list_processes(
+            sid, page=1, limit=10, filters={"is_flagged": True}
+        )["items"]
+    prompt = body.message or (body.messages[-1]["content"] if body.messages else "")
+    reply = (
+        f"Assets monitored: {stats['assets_monitored']}. "
+        f"Unseen alerts: {stats['unseen_alerts']}. "
+        f"Highest risk asset: {top_asset['label']} ({top_asset['risk_score']})"
+        if top_asset
+        else "No assets have been scored yet."
+    )
+    if device_summary:
+        reply = (
+            f"{reply} Device risk score: {device_summary.get('risk_score', 0)}/100 on "
+            f"{device_summary.get('hostname') or 'this host'}. "
+            f"Flagged connections: {device_summary.get('connections_flagged', 0)}, "
+            f"flagged processes: {device_summary.get('processes_flagged', 0)}."
+        )
+    low = (prompt or "").lower()
+    if "suspicious ip" in low or "connecting" in low:
+        if flagged_connections:
+            bits = [
+                f"{row.get('process_name')} → {row.get('remote_ip')} ({row.get('verdict')})"
+                for row in flagged_connections[:8]
+            ]
+            reply = f"Flagged connections: {'; '.join(bits)}"
+        else:
+            reply = "No flagged outbound connections in the latest device scan."
+    elif "device safe" in low or "is my device" in low:
+        score = int(device_summary.get("risk_score") or 0)
+        verdict = "SECURE" if score < 30 else "AT RISK" if score < 70 else "COMPROMISED"
+        reply = f"Latest device posture: {verdict} (risk {score}/100)."
+    elif "high risk" in low and "score" in low:
+        factors = []
+        if device_summary.get("connections_flagged"):
+            factors.append(f"{device_summary['connections_flagged']} flagged network connections")
+        if device_summary.get("processes_flagged"):
+            factors.append(f"{device_summary['processes_flagged']} suspicious processes")
+        reply = f"Top risk drivers: {', '.join(factors) or 'no major flagged categories in the last scan'}."
+    elif prompt:
+        reply = f"{reply}. Analyst question: {prompt}. Feed health: {feed_summary['auth_valid']}/{feed_summary['total']} authenticated."
+    return {
+        "reply": reply,
+        "response": reply,
+        "device_context": {
+            "summary": device_summary,
+            "flagged_connections": flagged_connections,
+            "flagged_processes": flagged_processes,
+        },
+    }
+
+
+@app.get("/api/aria/stats")
+async def aria_stats(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))):
+    return automation_service.aria_stats()
+
+
+@app.get("/api/admin/metrics")
+async def admin_metrics(user: UserContext = Depends(require_roles("admin"))):
+    return automation_service.admin_metrics()
+
+
+@app.get("/analyze", include_in_schema=False)
+@app.get("/threat-intel", include_in_schema=False)
+@app.get("/website-intel", include_in_schema=False)
+@app.get("/malware", include_in_schema=False)
+@app.get("/fusion-scan", include_in_schema=False)
+async def legacy_intelligence_redirect():
+    return RedirectResponse(url="/intelligence", status_code=301)
 
 
 @app.get("/{full_path:path}")
