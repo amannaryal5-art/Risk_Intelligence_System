@@ -12,8 +12,18 @@ function detectInputType(value) {
   if (!input) return 'AUTO'
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(input)) return 'IP'
   if (/^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$/.test(input)) return 'HASH'
-  if (/^https?:\/\//i.test(input) || /^(?:[a-z0-9-]+\.)+[a-z]{2,24}$/i.test(input)) return 'DOMAIN'
+  if (/^https?:\/\//i.test(input)) return 'URL'
+  if (/^(?:[a-z0-9-]+\.)+[a-z]{2,24}$/i.test(input)) return 'DOMAIN'
   return 'TEXT'
+}
+
+function getVerdict(riskScore, threatsFound, iocMatches) {
+  if ((iocMatches || 0) > 0 || (threatsFound || 0) > 0) return 'MALICIOUS'
+  if ((riskScore || 0) >= 80) return 'CRITICAL'
+  if ((riskScore || 0) >= 60) return 'HIGH RISK'
+  if ((riskScore || 0) >= 30) return 'MEDIUM RISK'
+  if ((riskScore || 0) >= 15) return 'LOW RISK'
+  return 'CLEAN'
 }
 
 export default function Intelligence() {
@@ -247,7 +257,36 @@ export default function Intelligence() {
                   <td className="px-4 py-3 text-slate-300">{item.risk_score}</td>
                   <td className="px-4 py-3 text-slate-300">{item.risk_score > 55 ? 1 : 0}</td>
                   <td className="px-4 py-3 text-slate-300">{item.ioc_correlation?.match_count || 0}</td>
-                  <td className="px-4 py-3 text-slate-300">{item.verdict}</td>
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const verdict = item.verdict || getVerdict(item.risk_score, item.risk_score > 55 ? 1 : 0, item.ioc_correlation?.match_count || 0)
+                      const borderColor =
+                        verdict === 'MALICIOUS' || verdict === 'CRITICAL'
+                          ? 'rgba(255,23,68,0.4)'
+                          : verdict.includes('HIGH')
+                            ? 'rgba(255,109,0,0.4)'
+                            : verdict.includes('MEDIUM')
+                              ? '#ffc107'
+                              : 'rgba(0,230,118,0.4)'
+                      const color =
+                        verdict === 'MALICIOUS'
+                          ? 'var(--red)'
+                          : verdict === 'CRITICAL'
+                            ? 'var(--orange)'
+                            : verdict.includes('HIGH')
+                              ? 'var(--orange)'
+                              : verdict.includes('MEDIUM')
+                                ? 'var(--yellow)'
+                                : verdict === 'LOW RISK'
+                                  ? 'var(--yellow)'
+                                  : 'var(--green)'
+                      return (
+                        <span className="rounded-sm border px-2 py-1 font-mono text-[10px]" style={{ borderColor, color }}>
+                          {verdict}
+                        </span>
+                      )
+                    })()}
+                  </td>
                 </tr>
               ))}
               {!expandedAssets.length ? (

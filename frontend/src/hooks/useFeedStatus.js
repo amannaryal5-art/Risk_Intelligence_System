@@ -42,7 +42,7 @@ export function useFeedStatus() {
           const payload = JSON.parse(event.data)
           if (payload?.type === 'feed_status' && payload?.data) setFeedStatus(payload.data)
           if (payload?.type === 'pipeline_snapshot' && payload?.data) setPipelineSnapshot(payload.data)
-          if (['pipeline_start', 'task_start', 'task_complete', 'pipeline_done'].includes(payload?.type)) {
+          if (['pipeline_start', 'pipeline_started', 'task_start', 'task_complete', 'pipeline_task_update', 'pipeline_done', 'pipeline_complete'].includes(payload?.type)) {
             handlePipelineEvent(payload)
           }
           if (payload?.type === 'new_alert') pushLiveAlert(payload)

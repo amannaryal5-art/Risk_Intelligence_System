@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Download } from 'lucide-react'
@@ -6,6 +6,53 @@ import client from '../api/client'
 import Spinner from '../components/ui/Spinner'
 import EmptyPanel from '../components/shared/EmptyPanel'
 import { downloadJson, formatDate } from '../lib/utils'
+
+function buildReportText(report) {
+  if (!report) return ''
+  if (typeof report.content === 'string') return report.content
+  const content = report.content || {}
+  const lines = [
+    '== DAILY THREAT INTELLIGENCE BRIEFING ==',
+    `TITLE: ${report.title || 'Untitled report'}`,
+    `GENERATED: ${formatDate(report.generated_at)}`,
+    '',
+    '== EXECUTIVE SUMMARY ==',
+    `ASSETS: ${content.summary?.asset_count || 0}`,
+    `AVG_RISK: ${content.summary?.avg_risk_score || 0}`,
+    `HIGHEST_RISK_ASSET: ${content.summary?.highest_risk_asset || 'n/a'} (${content.summary?.highest_risk_score || 0})`,
+    '',
+    '== TOP RISK ASSETS ==',
+    ...((content.top_assets || []).map((asset) => `${asset.label}: score ${asset.risk_score ?? 0} :: ${String(asset.risk_level || 'unknown').toUpperCase()}`)),
+    '',
+    '== FEED HEALTH ==',
+    ...((content.feed_health || []).map((feed) => `${feed.display_name}: ${feed.auth_valid ? 'SUCCESS' : feed.warning || 'WARNING'}`)),
+  ]
+
+  if (content.device_posture?.available) {
+    lines.push(
+      '',
+      '== DEVICE POSTURE ==',
+      `DEVICE_RISK_SCORE: ${content.device_posture.device_risk_score}/100`,
+      `NETWORK: ${content.device_posture.connections_total} total :: ${content.device_posture.connections_flagged} flagged`,
+      `PROCESSES: ${content.device_posture.processes_total} total :: ${content.device_posture.processes_flagged} suspicious`,
+      `OPEN_PORTS: ${content.device_posture.ports_open} listening :: ${content.device_posture.ports_suspicious} suspicious`,
+      `STARTUP: ${content.device_posture.startup_items} total :: ${content.device_posture.startup_flagged} unusual`,
+      `VERDICT: ${content.device_posture.verdict}`,
+    )
+  }
+
+  if (content.unified_intelligence_summary?.latest) {
+    lines.push(
+      '',
+      '== UNIFIED INTELLIGENCE ==',
+      `OVERALL_RISK: ${content.unified_intelligence_summary.latest.overall_risk_score || 0}`,
+      ...((content.unified_intelligence_summary.top_threats || []).map((item) => `${item.asset?.label || item.target}: ${item.verdict} (${item.risk_score})`)),
+    )
+  }
+
+  lines.push('', '== RECOMMENDATIONS ==', ...((content.recommendations || []).map((item) => `- ${item}`)))
+  return lines.join('\n')
+}
 
 export default function Reports() {
   const queryClient = useQueryClient()
@@ -34,6 +81,13 @@ export default function Reports() {
 
   const reports = reportsQuery.data || []
   const report = reportQuery.data
+  const reportText = useMemo(() => buildReportText(report), [report])
+
+  useEffect(() => {
+    if (!selectedId && reports.length) {
+      setSelectedId(reports[0].id)
+    }
+  }, [reports, selectedId])
 
   return (
     <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
@@ -51,7 +105,12 @@ export default function Reports() {
           <EmptyPanel icon="Reports" title="No reports yet" subtitle='Click "Generate report" to create your first intelligence briefing.' />
         ) : (
           reports.map((item) => (
-            <button key={item.id} type="button" className={`panel w-full p-5 text-left transition ${selectedId === item.id ? 'ring-1 ring-blue-500/50' : ''}`} onClick={() => setSelectedId(item.id)}>
+            <button
+              key={item.id}
+              type="button"
+              className={`panel w-full p-5 text-left transition ${selectedId === item.id ? 'ring-1 ring-cyber-cyan/50 bg-cyber-cyan/5' : ''}`}
+              onClick={() => setSelectedId(item.id)}
+            >
               <p className="font-mono text-sm text-slate-50">{item.title}</p>
               <p className="mt-2 text-xs text-slate-500">{formatDate(item.generated_at)}</p>
             </button>
@@ -74,87 +133,33 @@ export default function Reports() {
                 Export
               </button>
             </div>
-            <div className="space-y-5 text-sm text-slate-300">
-              <section>
-                <p className="section-title">Executive Summary</p>
-                <p className="mt-3">Assets: {report.content?.summary?.asset_count || 0} | Avg Risk: {report.content?.summary?.avg_risk_score || 0}</p>
-                <p className="mt-2">Highest risk asset: {report.content?.summary?.highest_risk_asset || 'n/a'} ({report.content?.summary?.highest_risk_score || 0})</p>
-              </section>
-              <section>
-                <p className="section-title">Top Risk Assets</p>
-                <div className="mt-3 space-y-2">
-                  {(report.content?.top_assets || []).map((asset) => (
-                    <div key={asset.id} className="rounded-xl border border-border bg-slate-950/50 px-4 py-3">
-                      {asset.label} - score {asset.risk_score ?? 0} ({asset.risk_level})
-                    </div>
-                  ))}
+            <div className="h-[32rem] overflow-auto rounded-xl border border-cyber-cyan/20 bg-black p-5 font-mono text-[11px] leading-7">
+              {reportText.split('\n').map((line, index) => (
+                <div
+                  key={`${report.id}-${index}`}
+                  className={
+                    line.startsWith('==')
+                      ? 'text-cyan-300'
+                      : /CRITICAL|COMPROMISED|ERROR|\[!\]/.test(line)
+                        ? 'text-red-400'
+                        : /SECURE|SUCCESS|LIVE|CLEAN/.test(line)
+                          ? 'text-emerald-400'
+                          : /MEDIUM|WARNING|AT RISK|HIGH RISK|LOW RISK/.test(line)
+                            ? 'text-orange-300'
+                            : 'text-slate-200'
+                  }
+                >
+                  {line || '\u00A0'}
                 </div>
-              </section>
-              <section>
-                <p className="section-title">Feed Health</p>
-                <div className="mt-3 grid gap-2">
-                  {(report.content?.feed_health || []).map((feed) => (
-                    <div key={feed.name} className="rounded-xl border border-border bg-slate-950/50 px-4 py-3">
-                      {feed.display_name}: {feed.auth_valid ? 'OK' : feed.warning || 'degraded'}
-                    </div>
-                  ))}
-                </div>
-              </section>
-              {report.content?.device_posture?.available ? (
-                <section>
-                  <p className="section-title">Device Posture</p>
-                  <div className="mt-3 space-y-2 rounded-xl border border-border bg-slate-950/50 px-4 py-3 text-sm">
-                    <p>
-                      Device Risk Score: {report.content.device_posture.device_risk_score}/100
-                      {report.content.device_posture.delta != null
-                        ? ` (${report.content.device_posture.delta >= 0 ? '↑' : '↓'} from ${report.content.device_posture.previous_risk_score} yesterday)`
-                        : ''}
-                    </p>
-                    <p>
-                      Network: {report.content.device_posture.connections_total} total, {report.content.device_posture.connections_flagged} flagged
-                    </p>
-                    <p>
-                      Processes: {report.content.device_posture.processes_total} total, {report.content.device_posture.processes_flagged} suspicious
-                    </p>
-                    <p>
-                      Open Ports: {report.content.device_posture.ports_open} listening ({report.content.device_posture.ports_suspicious} exposed)
-                    </p>
-                    <p>
-                      Startup: {report.content.device_posture.startup_items} total, {report.content.device_posture.startup_flagged} unusual
-                    </p>
-                    <p className="font-medium text-slate-100">Verdict: {report.content.device_posture.verdict}</p>
-                  </div>
-                </section>
-              ) : null}
-              {report.content?.unified_intelligence_summary?.latest ? (
-                <section>
-                  <p className="section-title">Unified Intelligence Summary</p>
-                  <div className="mt-3 rounded-xl border border-border bg-slate-950/50 px-4 py-3">
-                    Latest overall risk: {report.content.unified_intelligence_summary.latest.overall_risk_score || 0}
-                    {report.content.unified_intelligence_summary.delta != null ? ` | Delta: ${report.content.unified_intelligence_summary.delta}` : ''}
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    {(report.content.unified_intelligence_summary.top_threats || []).map((item, index) => (
-                      <div key={index} className="rounded-xl border border-border bg-slate-950/50 px-4 py-3">
-                        {item.asset?.label || item.target} - {item.verdict} ({item.risk_score})
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-              <section>
-                <p className="section-title">Recommendations</p>
-                <div className="mt-3 space-y-2">
-                  {(report.content?.recommendations || []).map((item, index) => (
-                    <div key={index} className="rounded-xl border border-border bg-slate-950/50 px-4 py-3">{item}</div>
-                  ))}
-                </div>
-              </section>
+              ))}
             </div>
           </>
         ) : (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-slate-500">Select a report from the list to view it.</p>
+          <div className="flex h-full items-center justify-center font-mono text-sm text-slate-500">
+            <div className="text-center">
+              <div>root@crie:~$ cat report.log</div>
+              <div>cat: No report selected</div>
+            </div>
           </div>
         )}
       </div>

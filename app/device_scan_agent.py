@@ -8,6 +8,7 @@ does not stop the scan.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import getpass
 import hashlib
 import ipaddress
@@ -47,9 +48,11 @@ ALLOWED_EXECUTABLES = frozenset(
         "kill",
         "netsh",
         "iptables",
+        "ufw",
         "uname",
         "uptime",
         "dscacheutil",
+        "socketfilterfw",
         "sw_vers",
         "system_profiler",
         "resolvectl",
@@ -111,28 +114,43 @@ def _uptime_seconds() -> Optional[int]:
         if sys.platform == "linux":
             raw = Path("/proc/uptime").read_text(encoding="utf-8", errors="replace").split()
             return int(float(raw[0])) if raw else None
-        if sys.platform == "darwin":
-            proc = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=5)
-            if proc.returncode == 0 and "sec" in proc.stdout:
-                sec = int(proc.stdout.split("=")[-1].strip().split()[0])
-                return max(0, int(time.time()) - sec)
         if sys.platform == "win32":
-            proc = subprocess.run(
-                [
-                    "powershell",
-                    "-NonInteractive",
-                    "-Command",
-                    "[int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if proc.returncode == 0 and proc.stdout.strip().isdigit():
-                return int(proc.stdout.strip())
-    except OSError:
+            get_tick_count = getattr(ctypes.windll.kernel32, "GetTickCount64", None)
+            if get_tick_count is not None:
+                return int(get_tick_count() / 1000)
+    except (AttributeError, OSError):
         pass
     return None
+
+
+def _network_interfaces() -> List[Dict[str, Any]]:
+    interfaces: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    mac_hex = f"{uuid.getnode():012x}"
+    mac_addr = ":".join(mac_hex[i : i + 2] for i in range(0, 12, 2))
+    try:
+        hostname = socket.gethostname()
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            ip = sockaddr[0]
+            if not ip or ip.startswith("127.") or ip == "::1":
+                continue
+            key = ("ipv6" if family == socket.AF_INET6 else "ipv4", ip)
+            if key in seen:
+                continue
+            seen.add(key)
+            interfaces.append(
+                {
+                    "interface": "primary",
+                    "ip": ip,
+                    "mac": mac_addr,
+                    "family": "IPv6" if family == socket.AF_INET6 else "IPv4",
+                }
+            )
+    except OSError:
+        pass
+    return interfaces
 
 
 def get_builtin_system_info() -> Dict[str, Any]:
@@ -152,7 +170,7 @@ def get_builtin_system_info() -> Dict[str, Any]:
         "hostname": socket.gethostname(),
         "platform": plat,
         "os_name": os_name,
-        "os_version": f"{os_name} {platform.release()}".strip(),
+        "os_version": platform.release(),
         "os_build": platform.version(),
         "cpu_model": cpu_model,
         "cpu_cores": cpus,
@@ -162,10 +180,47 @@ def get_builtin_system_info() -> Dict[str, Any]:
         "uptime_seconds": _uptime_seconds(),
         "current_user": user,
         "arch": platform.machine(),
-        "network_interfaces": [],
+        "network_interfaces": _network_interfaces(),
         "firewall_status": "unknown",
         "av_status": "unknown",
     }
+
+
+async def detect_firewall_and_av() -> Dict[str, str]:
+    result = {"firewall_status": "unknown", "av_status": "unknown"}
+    try:
+        if sys.platform == "win32":
+            code, out, _ = await asyncio.to_thread(run_exec, "netsh", ["advfirewall", "show", "allprofiles", "state"])
+            if code == 0:
+                result["firewall_status"] = "active" if "on" in out.lower() else "disabled"
+            try:
+                code, av_out, _ = await asyncio.to_thread(
+                    run_exec,
+                    "powershell",
+                    [
+                        "-NonInteractive",
+                        "-Command",
+                        "Get-MpComputerStatus | Select-Object AMServiceEnabled | ConvertTo-Json -Compress",
+                    ],
+                )
+                if code == 0 and av_out.strip():
+                    parsed = json.loads(av_out)
+                    result["av_status"] = "active" if parsed.get("AMServiceEnabled") else "disabled"
+            except Exception:
+                result["av_status"] = "unknown"
+        elif sys.platform == "linux":
+            code, out, _ = await asyncio.to_thread(run_exec, "ufw", ["status"])
+            if code == 0:
+                result["firewall_status"] = "active" if "active" in out.lower() else "inactive"
+        elif sys.platform == "darwin":
+            socketfilterfw = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+            if os.path.exists(socketfilterfw):
+                code, out, _ = await asyncio.to_thread(run_exec, socketfilterfw, ["--getglobalstate"])
+                if code == 0:
+                    result["firewall_status"] = "active" if "enabled" in out.lower() else "disabled"
+    except Exception:
+        return result
+    return result
 
 
 def utc_now_iso() -> str:
@@ -225,13 +280,13 @@ def suspicious_process_path(path: str, plat: str) -> Tuple[bool, str]:
 
 
 def resolve_executable(name: str) -> str:
-    base = os.path.basename(name).lower()
+    base = os.path.splitext(os.path.basename(name).lower())[0]
     if base not in ALLOWED_EXECUTABLES and name.lower() not in {e.lower() for e in ALLOWED_EXECUTABLES}:
         raise ValueError(f"Executable not allowlisted: {name}")
     resolved = shutil.which(name) if os.path.dirname(name) == "" else name
     if not resolved or not os.path.isfile(resolved):
         raise FileNotFoundError(f"Executable not found: {name}")
-    rb = os.path.basename(resolved).lower()
+    rb = os.path.splitext(os.path.basename(resolved).lower())[0]
     if rb not in ALLOWED_EXECUTABLES:
         raise ValueError(f"Resolved executable not allowlisted: {resolved}")
     return resolved
@@ -397,6 +452,11 @@ class DeviceScanAgent:
         cached = self._ioc_cache_get(ip, "ip", "otx")
         if cached is not None:
             return cached
+        feed_status = getattr(self.auto, "get_feed_record", lambda _name: None)("otx")
+        if feed_status and not feed_status.get("reachable"):
+            body = {"skipped": True, "reason": "AlienVault offline", "pulse_count": 0, "tags": []}
+            self._ioc_cache_set(ip, "ip", "otx", body)
+            return body
         resp = await self.feed.request("otx", "GET", f"https://otx.alienvault.com/api/v1/indicators/IPv4/{ip}/general")
         pulse = 0
         tags: List[str] = []
@@ -442,74 +502,8 @@ class DeviceScanAgent:
     async def collect_system_info(self) -> CollectorResult:
         full: Dict[str, Any] = dict(get_builtin_system_info())
         try:
-            if self.platform == "win32":
-                ps = (
-                    "$d = Get-ComputerInfo | Select-Object CsName,OsName,OsVersion,OsArchitecture,"
-                    "CsProcessors,CsTotalPhysicalMemory,CsUserName | ConvertTo-Json -Compress;"
-                    "$mp = try { Get-MpComputerStatus | Select-Object AMServiceEnabled,AntivirusEnabled | ConvertTo-Json -Compress } catch { '{}' };"
-                    "$fw = try { netsh advfirewall show allprofiles state } catch { '' };"
-                    "$d, $mp, $fw | Write-Output"
-                )
-                code, out, err = await asyncio.to_thread(run_exec, "powershell", ["-NoProfile", "-Command", ps], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                parts = [p.strip() for p in out.split("\n") if p.strip()]
-                try:
-                    comp = json.loads(parts[0]) if parts else {}
-                except json.JSONDecodeError:
-                    comp = {}
-                av = {}
-                try:
-                    av = json.loads(parts[1]) if len(parts) > 1 else {}
-                except json.JSONDecodeError:
-                    av = {}
-                fw_text = parts[2] if len(parts) > 2 else ""
-                fw_on = "ON" in fw_text.upper() or "ENABLE" in fw_text.upper()
-                ram_gb = round(int(comp.get("CsTotalPhysicalMemory") or 0) / (1024**3), 2) if comp.get("CsTotalPhysicalMemory") else None
-                procs = comp.get("CsProcessors") or []
-                cpu_model = procs[0].get("Name") if isinstance(procs, list) and procs and isinstance(procs[0], dict) else str(procs)
-                full.update(
-                    {
-                        "hostname": comp.get("CsName") or full.get("hostname"),
-                        "os_name": comp.get("OsName") or full.get("os_name"),
-                        "os_version": f"{comp.get('OsName','')} {comp.get('OsVersion','')}".strip() or full.get("os_version"),
-                        "cpu_model": cpu_model or full.get("cpu_model"),
-                        "ram_total_gb": ram_gb or full.get("ram_total_gb"),
-                        "ram_gb": ram_gb or full.get("ram_gb"),
-                        "current_user": comp.get("CsUserName") or full.get("current_user"),
-                        "firewall_status": "active" if fw_on else "disabled",
-                        "av_status": "detected" if av.get("AntivirusEnabled") else "not_found",
-                    }
-                )
-            elif self.platform == "darwin":
-                code, out, _ = await asyncio.to_thread(run_exec, "sw_vers", [], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                lines = [x for x in out.splitlines() if ":" in x]
-                ver = {k.strip(): v.strip() for k, v in (ln.split(":", 1) for ln in lines)}
-                _, up_out, _ = await asyncio.to_thread(run_exec, "uptime", [], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                full.update(
-                    {
-                        "hostname": platform.node() or full.get("hostname"),
-                        "os_name": ver.get("ProductName", "macOS"),
-                        "os_version": f"{ver.get('ProductName','')} {ver.get('ProductVersion','')}".strip(),
-                        "uptime_raw": up_out.strip(),
-                    }
-                )
-            else:
-                os_release = ""
-                try:
-                    os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    pass
-                _, uname_out, _ = await asyncio.to_thread(run_exec, "uname", ["-a"], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                _, up_out, _ = await asyncio.to_thread(run_exec, "uptime", [], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                full.update(
-                    {
-                        "hostname": platform.node() or full.get("hostname"),
-                        "os_version": uname_out.strip() or full.get("os_version"),
-                        "uptime_raw": up_out.strip(),
-                        "os_release": os_release[:800],
-                    }
-                )
-            if full.get("uptime_seconds") is None and full.get("uptime_raw"):
-                full["uptime_seconds"] = _uptime_seconds()
+            detection = await asyncio.wait_for(detect_firewall_and_av(), timeout=12)
+            full.update({k: v for k, v in detection.items() if v is not None})
             summary = {"hostname": full.get("hostname"), "platform": self.platform}
             self.auto.device_session_update_fields(
                 self.session_id,
@@ -534,34 +528,54 @@ class DeviceScanAgent:
                     "Select-Object -First 500 LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | "
                     "ConvertTo-Json -Compress -Depth 4"
                 )
-                _, out, _ = await asyncio.to_thread(run_exec, "powershell", ["-NoProfile", "-Command", ps], audit=self._audit_cmd, triggered_by=self.triggered_by)
-                try:
-                    data = json.loads(out or "[]")
-                    if isinstance(data, dict):
-                        data = [data]
-                except json.JSONDecodeError:
-                    data = []
+                code, out, _ = await asyncio.to_thread(run_exec, "powershell", ["-NoProfile", "-Command", ps], audit=self._audit_cmd, triggered_by=self.triggered_by)
+                data: List[Dict[str, Any]] = []
+                if code == 0 and out.strip():
+                    try:
+                        parsed = json.loads(out or "[]")
+                        if isinstance(parsed, dict):
+                            parsed = [parsed]
+                        data = [item for item in parsed if isinstance(item, dict)]
+                    except json.JSONDecodeError:
+                        data = []
                 pid_map = await self._windows_pid_map()
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    lip = str(item.get("LocalAddress") or "")
-                    rip = str(item.get("RemoteAddress") or "")
-                    pid = int(item.get("OwningProcess") or 0)
-                    proc = pid_map.get(pid, ("", ""))
-                    rows.append(
-                        {
-                            "local_ip": lip,
-                            "local_port": int(item.get("LocalPort") or 0),
-                            "remote_ip": rip,
-                            "remote_port": int(item.get("RemotePort") or 0),
-                            "protocol": "tcp",
-                            "state": str(item.get("State") or ""),
-                            "pid": pid,
-                            "process_name": proc[0],
-                            "process_path": proc[1],
-                        }
-                    )
+                if data:
+                    for item in data:
+                        lip = str(item.get("LocalAddress") or "")
+                        rip = str(item.get("RemoteAddress") or "")
+                        pid = int(item.get("OwningProcess") or 0)
+                        proc = pid_map.get(pid, ("", ""))
+                        rows.append(
+                            {
+                                "local_ip": lip,
+                                "local_port": int(item.get("LocalPort") or 0),
+                                "remote_ip": rip,
+                                "remote_port": int(item.get("RemotePort") or 0),
+                                "protocol": "tcp",
+                                "state": str(item.get("State") or ""),
+                                "pid": pid,
+                                "process_name": proc[0],
+                                "process_path": proc[1],
+                            }
+                        )
+                else:
+                    _, out, _ = await asyncio.to_thread(run_exec, "netstat", ["-ano", "-p", "tcp"], audit=self._audit_cmd, triggered_by=self.triggered_by)
+                    for item in self._parse_netstat_connections_windows(out):
+                        pid = int(item.get("pid") or 0)
+                        proc = pid_map.get(pid, ("", ""))
+                        rows.append(
+                            {
+                                "local_ip": item.get("local_ip") or "",
+                                "local_port": int(item.get("local_port") or 0),
+                                "remote_ip": item.get("remote_ip") or "",
+                                "remote_port": int(item.get("remote_port") or 0),
+                                "protocol": item.get("protocol") or "tcp",
+                                "state": item.get("state") or "",
+                                "pid": pid,
+                                "process_name": proc[0],
+                                "process_path": proc[1],
+                            }
+                        )
             else:
                 exe = "ss" if shutil.which("ss") else "netstat"
                 args = ["-tunap"] if exe == "ss" else ["-tunap"]
@@ -725,6 +739,52 @@ class DeviceScanAgent:
                 }
             )
         return rows
+
+    def _parse_netstat_connections_windows(self, text: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or not line.upper().startswith("TCP"):
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local = parts[1]
+            remote = parts[2]
+            state = parts[3] if len(parts) > 4 else ""
+            pid = int(parts[-1]) if parts[-1].isdigit() else 0
+
+            def split_addr(value: str) -> Tuple[str, int]:
+                if value.startswith("[") and "]:" in value:
+                    host, port = value.rsplit(":", 1)
+                    try:
+                        return host.strip("[]"), int(port)
+                    except ValueError:
+                        return host.strip("[]"), 0
+                if value.count(":") > 1:
+                    return value, 0
+                if ":" in value:
+                    host, port = value.rsplit(":", 1)
+                    try:
+                        return host, int(port)
+                    except ValueError:
+                        return host, 0
+                return value, 0
+
+            local_ip, local_port = split_addr(local)
+            remote_ip, remote_port = split_addr(remote)
+            out.append(
+                {
+                    "local_ip": local_ip,
+                    "local_port": local_port,
+                    "remote_ip": remote_ip,
+                    "remote_port": remote_port,
+                    "state": state,
+                    "pid": pid,
+                    "protocol": "tcp",
+                }
+            )
+        return out
 
     async def collect_processes(self) -> CollectorResult:
         rows_out: List[Dict[str, Any]] = []
@@ -1099,26 +1159,6 @@ class DeviceScanAgent:
                 hit = self._local_ioc_match("domain", d)
                 verdict = "malicious" if hit else "clean"
                 row = {"domain": d, "type": "cache", "ioc_match": hit, "verdict": verdict}
-                if not hit and self.feed.key_status().get("urlscan"):
-                    cached = self._ioc_cache_get(d, "domain", "urlscan")
-                    if cached is None:
-                        resp = await self.feed.request(
-                            "urlscan",
-                            "GET",
-                            "https://urlscan.io/api/v1/search/",
-                            params={"q": f"domain:{d}", "size": 1},
-                        )
-                        top = {}
-                        if resp.get("ok") and isinstance(resp.get("data"), dict):
-                            results = resp["data"].get("results") or []
-                            top = results[0] if results else {}
-                        cached_payload = {"top": top, "http": resp.get("http_status")}
-                        self._ioc_cache_set(d, "domain", "urlscan", cached_payload)
-                        cached = cached_payload
-                    overall = ((cached.get("top") or {}).get("verdicts") or {}).get("overall") or {}
-                    if overall.get("malicious"):
-                        verdict = "malicious"
-                        row["ioc_match"] = True
                 if verdict != "clean":
                     flagged.append(row)
             dns_payload = {"entries": [{"domain": d, "type": "cache", "ioc_match": False, "verdict": "clean"} for d in uniq[:80]], "flagged": flagged}

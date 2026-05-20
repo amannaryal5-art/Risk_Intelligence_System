@@ -116,6 +116,8 @@ class FeedClient:
         json_body: Optional[Dict[str, Any]] = None,
         timeout: float = 20.0,
     ) -> Dict[str, Any]:
+        if provider == "otx":
+            timeout = min(timeout, 8.0)
         headers = {"User-Agent": "CRIE/3.0"}
         key = ""
         if provider == "otx":
@@ -331,6 +333,13 @@ class AutomationService:
                     value_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS config_store (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key TEXT NOT NULL UNIQUE,
+                    value TEXT NOT NULL,
+                    updated_by TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS iocs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     type TEXT NOT NULL,
@@ -493,14 +502,51 @@ class AutomationService:
                     expires_at TEXT NOT NULL,
                     UNIQUE(ioc_value, ioc_type, source)
                 );
+                CREATE TABLE IF NOT EXISTS case_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    case_id INTEGER NOT NULL,
+                    author TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    metadata TEXT DEFAULT '{}',
+                    is_read INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS feed_rate_tracker (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    feed_name TEXT NOT NULL UNIQUE,
+                    requests_today INTEGER NOT NULL DEFAULT 0,
+                    daily_limit INTEGER NOT NULL,
+                    reset_at_daily TEXT NOT NULL,
+                    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE INDEX IF NOT EXISTS idx_device_net_session ON device_network_connections(session_id);
+                CREATE INDEX IF NOT EXISTS idx_device_net_remote_ip ON device_network_connections(remote_ip);
+                CREATE INDEX IF NOT EXISTS idx_device_net_flagged ON device_network_connections(is_flagged);
                 CREATE INDEX IF NOT EXISTS idx_device_proc_session ON device_processes(session_id);
+                CREATE INDEX IF NOT EXISTS idx_device_proc_flagged ON device_processes(is_flagged);
                 CREATE INDEX IF NOT EXISTS idx_device_ports_session ON device_open_ports(session_id);
                 CREATE INDEX IF NOT EXISTS idx_device_sw_session ON device_software_inventory(session_id);
                 CREATE INDEX IF NOT EXISTS idx_device_startup_session ON device_startup_items(session_id);
                 CREATE INDEX IF NOT EXISTS idx_ioc_cache_lookup ON ioc_lookup_cache(ioc_value, ioc_type, source);
+                CREATE INDEX IF NOT EXISTS idx_ioc_cache_expires_at ON ioc_lookup_cache(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_device_sessions_status ON device_scan_sessions(status);
+                CREATE INDEX IF NOT EXISTS idx_device_sessions_triggered_at ON device_scan_sessions(triggered_at DESC);
                 """
             )
+            device_session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(device_scan_sessions)").fetchall()}
+            for column, sql in {
+                "failed_collectors": "ALTER TABLE device_scan_sessions ADD COLUMN failed_collectors TEXT",
+            }.items():
+                if column not in device_session_cols:
+                    conn.execute(sql)
             ioc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(ioc_lookup_cache)").fetchall()}
             for column, sql in {
                 "is_flagged": "ALTER TABLE ioc_lookup_cache ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0",
@@ -509,6 +555,24 @@ class AutomationService:
             }.items():
                 if column not in ioc_cols:
                     conn.execute(sql)
+            for key, value in {
+                "scan_interval_hours": "4",
+                "scan_on_login": "true",
+                "alert_threshold": "30",
+                "case_threshold": "60",
+                "critical_threshold": "80",
+                "ioc_cache_ttl_hours": "24",
+                "max_parallel_ioc_checks": "10",
+                "auto_pull_ioc_interval_hours": "6",
+            }.items():
+                conn.execute(
+                    """
+                    INSERT INTO config_store(key, value, updated_at)
+                    VALUES(?,?,?)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    (key, value, utc_now_iso()),
+                )
             conn.commit()
 
     def seed_demo_assets(self) -> None:
@@ -565,7 +629,13 @@ class AutomationService:
                     "degraded": True,
                 }
             else:
-                resp = await self.feed_client.request(key, method, url, params=params)
+                resp = await self.feed_client.request(
+                    key,
+                    method,
+                    url,
+                    params=params,
+                    timeout=8.0 if key == "otx" else 20.0,
+                )
                 warning = None
                 degraded = False
                 if key == "urlscan" and resp.get("http_status") == 403:
@@ -683,6 +753,12 @@ class AutomationService:
             "auth_valid": sum(1 for feed in feeds if feed["auth_valid"]),
             "configured": sum(1 for value in self.feed_client.key_status().values() if value),
         }
+
+    def get_feed_record(self, name: str) -> Optional[Dict[str, Any]]:
+        for feed in self.get_feed_status():
+            if feed.get("name") == name:
+                return feed
+        return None
 
     def list_assets(self) -> List[Dict[str, Any]]:
         with self._conn() as conn:
@@ -1033,7 +1109,7 @@ class AutomationService:
                 "medium": sum(1 for asset in assets if 40 < (asset["risk_score"] or 0) <= 70),
                 "low": sum(1 for asset in assets if (asset["risk_score"] or 0) <= 40),
             }
-        last_device = self.last_device_session(user_id) if user_id else self.last_device_session()
+        last_device = self.preferred_device_session()
         asset_risk = float(last_session["overall_risk_score"]) if last_session else 0.0
         device_risk = float(last_device["overall_risk_score"]) if last_device else 0.0
         device_threats = 0
@@ -1122,7 +1198,7 @@ class AutomationService:
         return report
 
     def _report_device_posture(self) -> Dict[str, Any]:
-        session = self.last_device_session()
+        session = self.preferred_device_session()
         if not session:
             return {"available": False}
         with self._conn() as conn:
@@ -1535,14 +1611,14 @@ class AutomationService:
             float((fusion_result.get("result") or {}).get("posture_score") or 0),
         ]
         active_scores = [score for score in scores if score > 0]
-        risk_score = round(sum(active_scores) / max(len(active_scores), 1), 2) if active_scores else 0.0
-        verdict = "MALICIOUS" if risk_score > 80 else "SUSPICIOUS" if risk_score > 55 else "CLEAN"
-        severity = "CRITICAL" if risk_score > 85 else "HIGH" if risk_score > 70 else "MEDIUM" if risk_score > 40 else "LOW"
-
         correlated_assets = [
             asset for asset in self.list_assets()
             if asset["value"].lower() in match_values and asset["value"].lower() != target.lower()
         ]
+        risk_score = round(sum(active_scores) / max(len(active_scores), 1), 2) if active_scores else 0.0
+        threats_found = int((ti_result.get("result") or {}).get("positive_iocs") or 0)
+        verdict = self.unified_verdict(risk_score, threats_found, len(ioc_matches) + len(correlated_assets))
+        severity = "CRITICAL" if risk_score > 85 else "HIGH" if risk_score > 70 else "MEDIUM" if risk_score > 40 else "LOW"
         correlation = {
             "existing_ioc_matches": ioc_matches,
             "monitored_asset_matches": [{"id": asset["id"], "label": asset["label"], "value": asset["value"]} for asset in correlated_assets],
@@ -1864,6 +1940,44 @@ class AutomationService:
             )
             conn.commit()
 
+    def expire_stale_device_sessions(self, user_id: Optional[str] = None, max_age_minutes: int = 15) -> List[str]:
+        clauses = ["status='running'"]
+        params: List[Any] = []
+        if user_id:
+            clauses.append("user_id=?")
+            params.append(user_id)
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, triggered_at
+                FROM device_scan_sessions
+                WHERE {' AND '.join(clauses)}
+                ORDER BY triggered_at DESC
+                """,
+                params,
+            ).fetchall()
+        expired: List[str] = []
+        threshold = utc_now() - timedelta(minutes=max_age_minutes)
+        for row in rows:
+            session_id = str(row["id"])
+            triggered_at = row["triggered_at"]
+            is_debug = session_id.startswith("debug-")
+            is_stale = False
+            if triggered_at:
+                try:
+                    started = datetime.fromisoformat(triggered_at.replace("Z", "+00:00"))
+                    is_stale = started <= threshold
+                except ValueError:
+                    is_stale = True
+            else:
+                is_stale = True
+            if not is_debug and not is_stale:
+                continue
+            reason = "Debug session left running" if is_debug else f"Timed out after {max_age_minutes} minutes"
+            self.device_session_mark_failed(session_id, reason)
+            expired.append(session_id)
+        return expired
+
     def _device_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         out = dict(row)
         out["full_results"] = _json_loads(row["full_results"], {})
@@ -1887,6 +2001,32 @@ class AutomationService:
                 ).fetchone()
         return self.get_device_session(str(row["id"])) if row else None
 
+    def preferred_device_session(self, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        clauses = ["id NOT LIKE 'debug-%'", "status IN ('complete', 'partial')"]
+        params: List[Any] = []
+        if user_id:
+            clauses.append("user_id=?")
+            params.append(user_id)
+        with self._conn() as conn:
+            row = conn.execute(
+                f"""
+                SELECT id
+                FROM device_scan_sessions
+                WHERE {' AND '.join(clauses)}
+                ORDER BY
+                    CASE
+                        WHEN (connections_found + processes_found + ports_open + dns_entries_checked + startup_items) > 0
+                        THEN 1 ELSE 0
+                    END DESC,
+                    COALESCE(completed_at, triggered_at) DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        if row:
+            return self.get_device_session(str(row["id"]))
+        return self.last_device_session(user_id)
+
     def device_scan_history(self, limit: int = 30) -> List[Dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -1895,6 +2035,7 @@ class AutomationService:
                        connections_found, connections_flagged, processes_found, processes_flagged,
                        overall_risk_score
                 FROM device_scan_sessions
+                WHERE id NOT LIKE 'debug-%'
                 ORDER BY triggered_at DESC
                 LIMIT ?
                 """,
@@ -2285,9 +2426,16 @@ class AutomationService:
             )
 
     async def start_device_scan(self, user_id: str, triggered_by: str = "manual") -> str:
+        self.expire_stale_device_sessions(user_id)
         with self._conn() as conn:
             existing = conn.execute(
-                "SELECT id FROM device_scan_sessions WHERE user_id=? AND status='running' ORDER BY triggered_at DESC LIMIT 1",
+                """
+                SELECT id
+                FROM device_scan_sessions
+                WHERE user_id=? AND status='running' AND id NOT LIKE 'debug-%'
+                ORDER BY triggered_at DESC
+                LIMIT 1
+                """,
                 (user_id,),
             ).fetchone()
             if existing:
@@ -2298,6 +2446,20 @@ class AutomationService:
 
         asyncio.create_task(run_device_scan_async(self, user_id, session_id, triggered_by))
         return session_id
+
+    @staticmethod
+    def unified_verdict(risk_score: float, threats_found: int = 0, ioc_matches: int = 0) -> str:
+        if ioc_matches > 0 or threats_found > 0:
+            return "MALICIOUS"
+        if risk_score >= 80:
+            return "CRITICAL"
+        if risk_score >= 60:
+            return "HIGH RISK"
+        if risk_score >= 30:
+            return "MEDIUM RISK"
+        if risk_score >= 15:
+            return "LOW RISK"
+        return "CLEAN"
 
     def intelligence_risk_trend(self, user_id: Optional[str] = None, hours: int = 24) -> List[Dict[str, Any]]:
         params: List[Any] = [f"-{hours} hours"]
@@ -2487,6 +2649,7 @@ class AutomationService:
         return payload
 
     def create_pipeline_run(self, task_name: Optional[str] = None) -> str:
+        self.expire_stale_pipeline_runs()
         run_id = str(uuid.uuid4())
         with self._conn() as conn:
             conn.execute(
@@ -2498,6 +2661,43 @@ class AutomationService:
             )
             conn.commit()
         return run_id
+
+    def expire_stale_pipeline_runs(self, max_age_minutes: int = 10) -> List[str]:
+        threshold = utc_now() - timedelta(minutes=max_age_minutes)
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, started_at
+                FROM pipeline_runs
+                WHERE status='running'
+                ORDER BY started_at DESC
+                """
+            ).fetchall()
+            expired: List[str] = []
+            for row in rows:
+                started_at = row["started_at"]
+                try:
+                    started = datetime.fromisoformat((started_at or "").replace("Z", "+00:00"))
+                except ValueError:
+                    started = threshold - timedelta(seconds=1)
+                if started > threshold:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE pipeline_runs
+                    SET status='failed', completed_at=?, duration_ms=?, current_task=NULL
+                    WHERE id=?
+                    """,
+                    (
+                        utc_now_iso(),
+                        int((utc_now() - started).total_seconds() * 1000),
+                        row["id"],
+                    ),
+                )
+                expired.append(str(row["id"]))
+            if expired:
+                conn.commit()
+        return expired
 
     def record_step(self, run_id: str, result: PipelineStepResult, progress_pct: int) -> None:
         with self._conn() as conn:
@@ -2531,7 +2731,7 @@ class AutomationService:
             conn.execute(
                 """
                 UPDATE pipeline_runs
-                SET status=?, completed_at=?, duration_ms=?, progress_pct=100,
+                SET status=?, completed_at=?, duration_ms=?, progress_pct=100, current_task=NULL,
                     tasks_passed=(SELECT COUNT(*) FROM pipeline_steps WHERE run_id=? AND status='success'),
                     tasks_failed=(SELECT COUNT(*) FROM pipeline_steps WHERE run_id=? AND status='failed')
                 WHERE id=?
@@ -2541,6 +2741,7 @@ class AutomationService:
             conn.commit()
 
     def pipeline_status(self, run_id: str) -> Optional[Dict[str, Any]]:
+        self.expire_stale_pipeline_runs()
         with self._conn() as conn:
             run = conn.execute("SELECT * FROM pipeline_runs WHERE id=?", (run_id,)).fetchone()
             steps = conn.execute("SELECT * FROM pipeline_steps WHERE run_id=? ORDER BY id ASC", (run_id,)).fetchall()
@@ -2571,6 +2772,7 @@ class AutomationService:
         }
 
     def last_pipeline_run(self) -> Optional[Dict[str, Any]]:
+        self.expire_stale_pipeline_runs()
         with self._conn() as conn:
             row = conn.execute("SELECT id FROM pipeline_runs ORDER BY started_at DESC LIMIT 1").fetchone()
         return self.pipeline_status(row["id"]) if row else None
@@ -2592,44 +2794,109 @@ class AutomationService:
 
     async def run_full_pipeline(self, run_id: Optional[str] = None, single_task: Optional[str] = None) -> str:
         run_id = run_id or self.create_pipeline_run(single_task)
-        steps: List[tuple[str, str, Callable[[], Awaitable[Dict[str, Any]]]]] = [
-            ("run_device_scan", "Run Device Scan", self.task_run_device_scan),
-            ("health_check", "Health check", self.task_health_check),
-            ("probe_live_feeds", "Probe live feeds", self.task_probe_feeds),
-            ("run_aria_monitoring_cycle", "Run ARIA monitoring cycle", self.task_run_aria_monitoring_cycle),
-            ("run_unified_intelligence_scan", "Run Unified Intelligence Scan", self.task_run_unified_intelligence_scan),
-            ("sync_software_inventory", "Sync Software Inventory", self.task_sync_software_inventory),
-            ("rescan_all_assets", "Rescan all assets", self.task_rescan_all_assets),
-            ("refresh_alert_queue", "Refresh alert queue", self.task_refresh_alert_queue),
-            ("generate_daily_report", "Generate daily report", self.task_generate_daily_report),
-            ("sync_case_store", "Sync case store", self.task_sync_case_store),
-            ("update_aria_stats", "Update ARIA stats", self.task_update_aria_stats),
+        step_map: Dict[str, tuple[str, Callable[[], Awaitable[Dict[str, Any]]]]] = {
+            "health_check": ("Health check", self.task_health_check),
+            "probe_live_feeds": ("Probe live feeds", self.task_probe_feeds),
+            "run_device_scan": ("Run Device Scan", self.task_run_device_scan),
+            "run_unified_intelligence_scan": ("Run Unified Intelligence Scan", self.task_run_unified_intelligence_scan),
+            "run_aria_monitoring_cycle": ("Run ARIA monitoring cycle", self.task_run_aria_monitoring_cycle),
+            "rescan_all_assets": ("Rescan all assets", self.task_rescan_all_assets),
+            "refresh_alert_queue": ("Refresh alert queue", self.task_refresh_alert_queue),
+            "sync_case_store": ("Sync case store", self.task_sync_case_store),
+            "update_aria_stats": ("Update ARIA stats", self.task_update_aria_stats),
+            "sync_software_inventory": ("Sync Software Inventory", self.task_sync_software_inventory),
+            "generate_daily_report": ("Generate daily report", self.task_generate_daily_report),
+        }
+        phases: List[List[str]] = [
+            ["health_check", "probe_live_feeds"],
+            ["run_device_scan", "run_unified_intelligence_scan"],
+            ["run_aria_monitoring_cycle", "rescan_all_assets"],
+            ["refresh_alert_queue", "sync_case_store", "update_aria_stats", "sync_software_inventory"],
+            ["generate_daily_report"],
         ]
         if single_task:
-            steps = [step for step in steps if step[0] == single_task]
-        await self.ws_hub.broadcast({"type": "pipeline_start", "run_id": run_id, "total_tasks": len(steps), "started_at": utc_now_iso()})
-        for index, (task_key, label, handler) in enumerate(steps, start=1):
-            await self.ws_hub.broadcast({"type": "task_start", "run_id": run_id, "task": task_key, "task_index": index, "total": len(steps), "label": label})
-            result = await self._step(task_key, handler)
-            progress = int(index / max(len(steps), 1) * 100)
-            self.record_step(run_id, result, progress)
+            phases = [[single_task]]
+        ordered_tasks = [task for phase in phases for task in phase if task in step_map]
+        total_tasks = len(ordered_tasks)
+        completed_tasks = 0
+
+        await self.ws_hub.broadcast({"type": "pipeline_start", "run_id": run_id, "total_tasks": total_tasks, "started_at": utc_now_iso()})
+        await self.ws_hub.broadcast({"type": "pipeline_started", "run_id": run_id, "total_tasks": total_tasks, "started_at": utc_now_iso()})
+
+        async def run_task(task_key: str, task_index: int) -> PipelineStepResult:
+            label, handler = step_map[task_key]
+            logger.info("[AutoPilot] Starting: %s", task_key)
+            await self.ws_hub.broadcast({"type": "task_start", "run_id": run_id, "task": task_key, "task_index": task_index, "total": total_tasks, "label": label})
             await self.ws_hub.broadcast(
                 {
-                    "type": "task_complete",
+                    "type": "pipeline_task_update",
                     "run_id": run_id,
                     "task": task_key,
-                    "status": result.status,
-                    "summary": result.summary,
-                    "duration_ms": result.duration_ms,
-                    "progress_pct": progress,
-                    "data": result.data,
+                    "label": label,
+                    "status": "running",
+                    "task_index": task_index,
+                    "total_tasks": total_tasks,
+                    "progress": int(completed_tasks / max(total_tasks, 1) * 100),
                 }
             )
+            result = await self._step(task_key, handler)
+            logger.info("[AutoPilot] %s: %s (%sms)", result.status.upper(), task_key, result.duration_ms)
+            return result
+
+        for phase in phases:
+            active = [task for task in phase if task in step_map]
+            if not active:
+                continue
+            phase_results = await asyncio.gather(
+                *[run_task(task_key, ordered_tasks.index(task_key) + 1) for task_key in active],
+                return_exceptions=False,
+            )
+            for task_key, result in zip(active, phase_results):
+                completed_tasks += 1
+                progress = int(completed_tasks / max(total_tasks, 1) * 100)
+                self.record_step(run_id, result, progress)
+                await self.ws_hub.broadcast(
+                    {
+                        "type": "task_complete",
+                        "run_id": run_id,
+                        "task": task_key,
+                        "status": result.status,
+                        "summary": result.summary,
+                        "duration_ms": result.duration_ms,
+                        "progress_pct": progress,
+                        "data": result.data,
+                        "error": result.error,
+                    }
+                )
+                await self.ws_hub.broadcast(
+                    {
+                        "type": "pipeline_task_update",
+                        "run_id": run_id,
+                        "task": task_key,
+                        "label": step_map[task_key][0],
+                        "status": result.status,
+                        "result": result.summary,
+                        "duration": result.duration_ms,
+                        "error": result.error,
+                        "progress": progress,
+                    }
+                )
         self.complete_pipeline_run(run_id)
         latest = self.pipeline_status(run_id)
         await self.ws_hub.broadcast(
             {
                 "type": "pipeline_done",
+                "run_id": run_id,
+                "status": latest["status"],
+                "duration_ms": latest["duration_ms"],
+                "passed": latest["tasks_passed"],
+                "failed": latest["tasks_failed"],
+                "completed_at": latest["completed_at"],
+            }
+        )
+        await self.ws_hub.broadcast(
+            {
+                "type": "pipeline_complete",
                 "run_id": run_id,
                 "status": latest["status"],
                 "duration_ms": latest["duration_ms"],
@@ -2647,6 +2914,9 @@ class AutomationService:
         while session and session.get("status") == "running" and time.monotonic() < deadline:
             await asyncio.sleep(1.0)
             session = self.get_device_session(session_id)
+        if session and session.get("status") == "running":
+            self.device_session_mark_failed(session_id, "Timed out after 300 seconds")
+            session = self.get_device_session(session_id)
         session = session or {}
         return {
             "session_id": session_id,
@@ -2657,7 +2927,8 @@ class AutomationService:
             "summary": (
                 f"{session.get('connections_found', 0)} connections checked "
                 f"({session.get('connections_flagged', 0)} flagged), "
-                f"{session.get('processes_found', 0)} processes analyzed"
+                f"{session.get('processes_found', 0)} processes analyzed, "
+                f"risk score: {session.get('overall_risk_score', 0)}"
             ),
         }
 
@@ -2668,7 +2939,7 @@ class AutomationService:
         return {
             "session_id": result.get("session_id"),
             "count": result.get("count", 0),
-            "summary": f"Software inventory refreshed ({result.get('count', 0)} applications)",
+            "summary": f"{result.get('count', 0)} applications found",
         }
 
     async def task_health_check(self) -> Dict[str, Any]:

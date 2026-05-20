@@ -24,6 +24,7 @@ export default function Topbar({ onPaletteOpen, unseenCount = 0, pipeline }) {
             <span className="text-cyber-cyan/80 uppercase">
               {pipeline?.isRunning ? 'PIPELINE_RUNNING' : pipeline?.lastRun ? 'PIPELINE_IDLE' : 'NO_PIPELINE_RUN'}
             </span>
+            {pipeline?.currentTask ? <span className="text-slate-500">- {String(pipeline.currentTask).toUpperCase()}</span> : null}
           </div>
           <div className="relative rounded-none border border-cyber-cyan/40 bg-cyber-black/80 px-3 py-2">
             <Bell className="h-4 w-4 text-cyber-cyan" />

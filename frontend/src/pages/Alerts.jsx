@@ -92,25 +92,35 @@ export default function Alerts() {
         <EmptyPanel icon="Alerts" title="No alerts" subtitle="Run AutoPilot to scan assets and generate live alerts." />
       ) : (
         <div className="grid gap-4">
-          {filtered.map((alert) => (
-            <div key={alert.id} className={`panel p-5 transition ${alert.seen ? 'opacity-75' : 'ring-1 ring-red-500/20'}`}>
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <RiskBadge level={alert.severity || alert.risk_level} />
-                    <p className="font-medium text-slate-100">{alert.title}</p>
+          {filtered.map((alert) => {
+            const isCritical = String(alert.severity || alert.risk_level || '').toUpperCase() === 'CRITICAL'
+            return (
+              <div
+                key={alert.id}
+                className={`panel p-5 transition ${alert.seen ? 'opacity-75' : 'ring-1 ring-red-500/20'}`}
+                style={{
+                  borderLeft: `3px solid ${isCritical ? 'var(--red)' : 'var(--orange)'}`,
+                  background: isCritical ? 'rgba(255,23,68,0.04)' : 'rgba(255,109,0,0.02)',
+                }}
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <RiskBadge level={alert.severity || alert.risk_level} />
+                      <p className="font-medium text-slate-100">{alert.title}</p>
+                    </div>
+                    <p className="mt-3 text-sm text-slate-300">{alert.message}</p>
+                    <p className="mt-3 font-mono text-[11px] text-slate-500">{alert.asset_value} | {formatDate(alert.created_at)}</p>
                   </div>
-                  <p className="mt-3 text-sm text-slate-300">{alert.message}</p>
-                  <p className="mt-3 text-xs text-slate-500">{alert.asset_value} | {formatDate(alert.created_at)}</p>
+                  {!alert.seen && !String(alert.id).startsWith('live-') ? (
+                    <button type="button" className="btn-secondary shrink-0 text-xs" disabled={seenMutation.isPending} onClick={() => seenMutation.mutate(alert.id)}>
+                      Mark seen
+                    </button>
+                  ) : null}
                 </div>
-                {!alert.seen && !String(alert.id).startsWith('live-') ? (
-                  <button type="button" className="btn-secondary shrink-0 text-xs" disabled={seenMutation.isPending} onClick={() => seenMutation.mutate(alert.id)}>
-                    Mark seen
-                  </button>
-                ) : null}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

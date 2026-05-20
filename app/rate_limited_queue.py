@@ -11,6 +11,16 @@ logger = logging.getLogger("riskintel.queue")
 T = TypeVar("T")
 
 
+def _status_code_from_result(result: Any) -> int | None:
+    if isinstance(result, dict):
+        raw_status = result.get("http_status") or result.get("status")
+        try:
+            return int(raw_status) if raw_status is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 class RateLimitedQueue:
     """Serializes API calls with minimum spacing and retries on HTTP 429."""
 
@@ -47,6 +57,10 @@ class RateLimitedQueue:
                         await asyncio.sleep(wait / 1000.0)
                     try:
                         result = await fn()
+                        if _status_code_from_result(result) == 429:
+                            logger.warning("%s returned HTTP 429, backing off 62s", self.name)
+                            await asyncio.sleep(62)
+                            result = await fn()
                     except Exception as exc:
                         status = getattr(getattr(exc, "response", None), "status_code", None)
                         if status == 429 or "429" in str(exc):

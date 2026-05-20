@@ -9,6 +9,7 @@ import socket
 import sys
 import time
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -387,7 +388,8 @@ async def _probe_feed(feed_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Feed probe %s url=%s headers=%s", feed_name, config["health_check_url"], {k: (_mask_secret(v) if "key" in k.lower() else v) for k, v in headers.items()})
     try:
         started = time.monotonic()
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        timeout = 8.0 if feed_name == "alienvault_otx" else 10.0
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             response = await client.get(config["health_check_url"], headers=headers)
         latency_ms = int((time.monotonic() - started) * 1000)
         return {"name": feed_name, "display_name": config.get("name", feed_name), "configured": True, "reachable": response.status_code < 500, "auth_valid": response.status_code not in (401, 403), "latency_ms": latency_ms, "http_status": response.status_code, "error": None if response.status_code < 500 else f"HTTP {response.status_code}", "last_checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -918,6 +920,37 @@ async def feeds_probe_all(user: UserContext = Depends(require_roles("admin", "an
     return await refresh_feed_status_cache()
 
 
+@app.get("/api/feeds/test-key")
+async def feeds_test_key(
+    feed: str,
+    key: Optional[str] = None,
+    user: UserContext = Depends(require_roles("admin", "analyst")),
+) -> dict:
+    feed_aliases = {"alienvault": "alienvault_otx", "alienvault_otx": "alienvault_otx"}
+    feed_name = feed_aliases.get(feed.lower(), feed.lower())
+    configs = _build_feed_configs()
+    config = configs.get(feed_name)
+    if not config:
+        raise HTTPException(404, "Feed not supported")
+    api_key = (key or config.get("api_key") or "").strip()
+    if not api_key:
+        return {"feed": feed_name, "ok": False, "message": "API key missing"}
+    headers = _build_auth_headers(feed_name, api_key)
+    headers["User-Agent"] = "RiskIntel/3.0"
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            response = await client.get(config["health_check_url"], headers=headers)
+        if response.status_code == 200:
+            return {"feed": feed_name, "ok": True, "message": "Valid - feed connected", "http_status": 200}
+        if response.status_code == 401:
+            return {"feed": feed_name, "ok": False, "message": "Invalid API key - get a free key at otx.alienvault.com", "http_status": 401}
+        return {"feed": feed_name, "ok": False, "message": f"Feed returned HTTP {response.status_code}", "http_status": response.status_code}
+    except (httpx.TimeoutException, httpx.ConnectError):
+        return {"feed": feed_name, "ok": False, "message": "AlienVault unreachable from this network", "http_status": None}
+    except httpx.HTTPError as exc:
+        return {"feed": feed_name, "ok": False, "message": str(exc), "http_status": None}
+
+
 @app.get("/api/v1/auth/whoami")
 async def whoami(user: UserContext = Depends(get_current_user)) -> dict:
     scans_initiated: List[str] = []
@@ -1373,7 +1406,7 @@ async def device_scan_start(user: UserContext = Depends(require_roles("admin", "
 
 @app.get("/api/device/scan/latest")
 async def device_scan_latest(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
-    session = automation_service.last_device_session(user.username)
+    session = automation_service.preferred_device_session()
     if not session:
         raise HTTPException(404, "No device scan session found")
     sid = session["id"]
@@ -1485,9 +1518,105 @@ async def device_test(user: UserContext = Depends(require_roles("admin", "analys
     }
 
 
+@app.get("/api/device/test-sysinfo")
+async def device_test_sysinfo(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    from .device_scan_agent import detect_firewall_and_av, get_builtin_system_info
+
+    info = get_builtin_system_info()
+    return {**info, **await detect_firewall_and_av()}
+
+
+async def _run_device_debug_collector(collector_name: str) -> dict:
+    from .device_scan_agent import DeviceScanAgent
+
+    session_id = f"debug-{collector_name}-{uuid.uuid4()}"
+    automation_service.device_session_insert_running(session_id, "DEBUG", "manual")
+    agent = DeviceScanAgent(automation_service, "DEBUG", session_id, "manual")
+    collector = getattr(agent, collector_name)
+    result = await collector()
+    session = automation_service.get_device_session(session_id) or {}
+    full = session.get("full_results") or {}
+    automation_service.device_session_finalize(
+        session_id,
+        {
+            "status": "complete" if result.ok else "partial",
+            "completed_at": datetime.utcnow().isoformat() + "Z",
+            "hostname": (full.get("system") or {}).get("hostname"),
+            "os_platform": (full.get("system") or {}).get("platform"),
+            "connections_found": result.summary.get("found", 0) if collector_name == "collect_network" else 0,
+            "connections_flagged": result.summary.get("flagged", 0) if collector_name == "collect_network" else 0,
+            "processes_found": result.summary.get("found", 0) if collector_name == "collect_processes" else 0,
+            "processes_flagged": result.summary.get("flagged", 0) if collector_name == "collect_processes" else 0,
+            "ports_open": result.summary.get("open", 0) if collector_name == "collect_ports" else 0,
+            "ports_suspicious": result.summary.get("suspicious", 0) if collector_name == "collect_ports" else 0,
+            "software_count": result.summary.get("count", 0) if collector_name == "collect_software" else 0,
+            "dns_entries_checked": result.summary.get("checked", 0) if collector_name == "collect_dns" else 0,
+            "dns_flagged": result.summary.get("flagged", 0) if collector_name == "collect_dns" else 0,
+            "startup_items": result.summary.get("total", 0) if collector_name == "collect_startup" else 0,
+            "startup_flagged": result.summary.get("flagged", 0) if collector_name == "collect_startup" else 0,
+            "overall_risk_score": 0,
+            "full_results": full,
+        },
+    )
+    session = automation_service.get_device_session(session_id) or {}
+    full = session.get("full_results") or {}
+    return {"result": result, "session": session, "full": full}
+
+
+@app.get("/api/device/test-network")
+async def device_test_network(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_network")
+    items = automation_service.device_list_connections(payload["session"]["id"], page=1, limit=3)["items"]
+    return {"count": payload["result"].summary.get("found", 0), "sample": items, "ok": payload["result"].ok}
+
+
+@app.get("/api/device/test-processes")
+async def device_test_processes(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_processes")
+    items = automation_service.device_list_processes(payload["session"]["id"], page=1, limit=3)["items"]
+    return {"count": payload["result"].summary.get("found", 0), "sample": items, "ok": payload["result"].ok}
+
+
+@app.get("/api/device/test-ports")
+async def device_test_ports(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_ports")
+    items = automation_service.device_list_ports(payload["session"]["id"], page=1, limit=3)["items"]
+    return {"count": payload["result"].summary.get("open", 0), "sample": items, "ok": payload["result"].ok}
+
+
+@app.get("/api/device/test-software")
+async def device_test_software(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_software")
+    items = automation_service.device_list_software(payload["session"]["id"], page=1, limit=3)["items"]
+    return {"count": payload["result"].summary.get("count", 0), "sample": items, "ok": payload["result"].ok}
+
+
+@app.get("/api/device/test-dns")
+async def device_test_dns(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_dns")
+    dns = payload["full"].get("dns") or {}
+    return {
+        "hosts_entries": len(dns.get("entries") or []),
+        "flagged_hosts": dns.get("flagged") or [],
+        "dns_domains_checked": payload["result"].summary.get("checked", 0),
+        "dns_flagged": payload["result"].summary.get("flagged", 0),
+        "ok": payload["result"].ok,
+    }
+
+
+@app.get("/api/device/test-startup")
+async def device_test_startup(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
+    payload = await _run_device_debug_collector("collect_startup")
+    items = automation_service.device_list_startup(payload["session"]["id"], page=1, limit=3)["items"]
+    return {"count": payload["result"].summary.get("total", 0), "sample": items, "ok": payload["result"].ok}
+
+
 @app.get("/api/device/sysinfo")
 async def device_sysinfo(user: UserContext = Depends(require_roles("admin", "analyst", "viewer"))) -> dict:
-    return automation_service.device_sysinfo(user.username)
+    from .device_scan_agent import detect_firewall_and_av
+
+    info = automation_service.device_sysinfo(user.username)
+    return {**info, **await detect_firewall_and_av()}
 
 
 @app.post("/api/device/process/kill")
@@ -1726,7 +1855,7 @@ async def aria_chat(body: AriaChatRequest, user: UserContext = Depends(require_r
     assets = automation_service.list_assets()
     top_asset = max(assets, key=lambda item: item["risk_score"] or 0) if assets else None
     feed_summary = automation_service.feed_summary()
-    device_session = automation_service.last_device_session(user.username)
+    device_session = automation_service.preferred_device_session()
     device_summary: Dict[str, Any] = {}
     flagged_connections: List[Dict[str, Any]] = []
     flagged_processes: List[Dict[str, Any]] = []

@@ -75,7 +75,7 @@ export const useWsStore = create((set) => ({
   handlePipelineEvent: (event) =>
     set((state) => {
       const pipeline = { ...state.pipeline }
-      if (event.type === 'pipeline_start') {
+      if (event.type === 'pipeline_start' || event.type === 'pipeline_started') {
         pipeline.isRunning = true
         pipeline.runId = event.run_id
         pipeline.progress = 0
@@ -105,9 +105,24 @@ export const useWsStore = create((set) => ({
           },
         }
       }
-      if (event.type === 'pipeline_done') {
+      if (event.type === 'pipeline_task_update') {
+        pipeline.isRunning = event.status === 'running' ? true : pipeline.isRunning
+        pipeline.progress = event.progress ?? pipeline.progress
+        pipeline.currentTask = event.status === 'running' ? event.task : pipeline.currentTask
+        pipeline.taskStatuses = {
+          ...pipeline.taskStatuses,
+          [event.task]: {
+            status: event.status,
+            summary: event.result || event.error || (event.status === 'running' ? 'Running...' : 'Completed'),
+            duration: event.duration ?? 0,
+            error: event.error,
+          },
+        }
+      }
+      if (event.type === 'pipeline_done' || event.type === 'pipeline_complete') {
         pipeline.isRunning = false
         pipeline.progress = 100
+        pipeline.currentTask = null
         pipeline.lastRun = {
           completedAt: event.completed_at,
           passed: event.passed,

@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from 'recharts'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
@@ -23,12 +24,38 @@ export default function Dashboard() {
   const systemScan = useWsStore((state) => state.systemScan)
   const deviceScan = useWsStore((state) => state.deviceScan)
   const dismissDeviceScanBanner = useWsStore((state) => state.dismissDeviceScanBanner)
+  const [dismissSystemBanner, setDismissSystemBanner] = useState(false)
 
-  const pieData = data?.aria_risk_distribution
-    ? Object.entries(data.aria_risk_distribution)
+  const counts = data?.aria_risk_distribution || { critical: 0, high: 0, medium: 0, low: 0 }
+  const pieData = useMemo(
+    () =>
+      Object.entries(counts)
         .map(([name, value]) => ({ name, value, color: COLORS[name] }))
-        .filter((item) => item.value > 0)
-    : []
+        .filter((item) => item.value > 0),
+    [counts],
+  )
+  const totalAssets = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0)
+  const overallVerdict = counts.critical > 0 ? 'CRITICAL' : counts.high > 0 || counts.medium > 0 ? 'AT RISK' : 'SECURE'
+
+  useEffect(() => {
+    if (deviceScan.status === 'complete' && !deviceScan.dismissComplete) {
+      const timer = window.setTimeout(() => dismissDeviceScanBanner(), 12000)
+      return () => window.clearTimeout(timer)
+    }
+    return undefined
+  }, [deviceScan.dismissComplete, deviceScan.status, dismissDeviceScanBanner])
+
+  useEffect(() => {
+    if (systemScan.status === 'running') {
+      setDismissSystemBanner(false)
+      return undefined
+    }
+    if (systemScan.status === 'complete') {
+      const timer = window.setTimeout(() => setDismissSystemBanner(true), 12000)
+      return () => window.clearTimeout(timer)
+    }
+    return undefined
+  }, [systemScan.status])
 
   const stats = [
     ['Total Cases', data?.total_cases || 0],
@@ -42,28 +69,27 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {deviceScan.status === 'running' ? (
-        <div className="hacker-panel p-4 text-sm text-cyber-cyan font-mono animate-pulse">
-          {'>'} SYSTEM_SCAN_ACTIVE :: PHASE_{deviceScan.phase?.toUpperCase() || 'INIT'} :: {deviceScan.progress}% :: {deviceScan.message}
+        <div className="hacker-panel p-4 text-sm font-mono text-cyber-cyan animate-pulse">
+          {'>'} DEVICE_SCAN_RUNNING :: PHASE_{deviceScan.phase?.toUpperCase() || 'INIT'} :: {deviceScan.progress}% :: {deviceScan.message}
         </div>
       ) : deviceScan.status === 'complete' && !deviceScan.dismissComplete ? (
-        <div className="hacker-panel flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-cyber-green font-mono">
+        <div className="hacker-panel flex flex-wrap items-center justify-between gap-3 p-4 text-sm font-mono text-cyber-green">
           <span>
-            {'>'} SCAN_COMPLETE :: RISK_SCORE: {deviceScan.summary?.riskScore ?? 0} :: 
-            THREATS_DETECTED: {(deviceScan.summary?.connectionsFlagged || 0) + (deviceScan.summary?.processesFlagged || 0)}
+            {'>'} DEVICE_SCAN_COMPLETE :: RISK_SCORE: {deviceScan.summary?.riskScore ?? 0} :: THREATS: {(deviceScan.summary?.connectionsFlagged || 0) + (deviceScan.summary?.processesFlagged || 0)}
           </span>
           <button type="button" className="border border-cyber-green/50 px-2 py-1 hover:bg-cyber-green/10" onClick={dismissDeviceScanBanner}>
             [ DISMISS ]
           </button>
         </div>
       ) : null}
+
       {systemScan.status === 'running' ? (
-        <div className="hacker-panel p-4 text-sm text-cyber-cyan font-mono animate-pulse">
-          {'>'} ASSET_SCAN_ACTIVE :: TARGET_{systemScan.currentAsset || 'UNKNOWN'} :: {systemScan.progress}%
+        <div className="hacker-panel p-4 text-sm font-mono text-cyber-cyan animate-pulse">
+          {'>'} ASSET_SCAN_RUNNING :: TARGET_{systemScan.currentAsset || 'UNKNOWN'} :: {systemScan.progress}%
         </div>
-      ) : systemScan.status === 'complete' ? (
-        <div className="hacker-panel p-4 text-sm text-cyber-green font-mono">
-          {'>'} ASSET_SCAN_COMPLETE :: RISK_SCORE: {Math.round(systemScan.summary?.overall_risk_score || data?.asset_risk_score || 0)} :: 
-          THREATS_DETECTED: {systemScan.summary?.threats_found || 0}
+      ) : systemScan.status === 'complete' && !dismissSystemBanner ? (
+        <div className="hacker-panel p-4 text-sm font-mono text-cyber-green">
+          {'>'} ASSET_SCAN_COMPLETE :: RISK_SCORE: {Math.round(systemScan.summary?.overall_risk_score || data?.asset_risk_score || 0)} :: THREATS_DETECTED: {systemScan.summary?.threats_found || 0}
         </div>
       ) : null}
 
@@ -89,9 +115,7 @@ export default function Dashboard() {
           </div>
         ) : pipeline.lastRun ? (
           <div className="flex items-center justify-between gap-4 text-sm font-mono text-cyber-cyan/80">
-            <span>
-              {'>'} LAST_EXECUTION: {formatDate(pipeline.lastRun.completedAt)} :: STATUS: {pipeline.lastRun.passed}/{(pipeline.lastRun.passed || 0) + (pipeline.lastRun.failed || 0)} PASSED
-            </span>
+            <span>{'>'} LAST_EXECUTION: {formatDate(pipeline.lastRun.completedAt)} :: STATUS: {pipeline.lastRun.passed}/{(pipeline.lastRun.passed || 0) + (pipeline.lastRun.failed || 0)} PASSED</span>
             <button type="button" className="border border-cyber-cyan/50 px-3 py-1.5 hover:bg-cyber-cyan/10 hover:text-cyber-cyan transition-colors" onClick={() => navigate('/reports')}>
               [ VIEW_REPORT ]
             </button>
@@ -109,9 +133,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-4 h-80">
             {!trend?.length ? (
-              <div className="flex h-80 items-center justify-center font-mono text-sm text-cyber-cyan/30">
-                {'>'} AWAITING_SCAN_DATA
-              </div>
+              <div className="flex h-80 items-center justify-center font-mono text-sm text-cyber-cyan/30">{'>'} AWAITING_SCAN_DATA</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trend}>
@@ -129,20 +151,36 @@ export default function Dashboard() {
         <div className="hacker-panel p-5">
           <div className="flex items-center justify-between font-mono">
             <p className="text-[12px] uppercase tracking-widest text-cyber-cyan">ARIA_RISK_DISTRIBUTION</p>
-            <span className="text-[10px] text-cyber-cyan/40">ASSETS: {data?.assets_monitored || 0}</span>
+            <span className="text-[10px] text-cyber-cyan/40">ASSETS: {totalAssets}</span>
           </div>
           <div className="mt-4 h-80">
             {pieData.length === 0 ? (
               <div className="flex h-80 items-center justify-center font-mono text-sm text-cyber-cyan/30">{'>'} NO_ASSETS_FOUND</div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={pieData} dataKey="value" innerRadius={70} outerRadius={90} paddingAngle={2} stroke="none">
-                    {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ backgroundColor: '#010409', borderColor: '#00d4ff', borderRadius: '0' }} />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="h-full">
+                <ResponsiveContainer width="100%" height="85%">
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" innerRadius={70} outerRadius={90} paddingAngle={2} stroke="none">
+                      {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                    </Pie>
+                    <text x="50%" y="48%" textAnchor="middle" className="fill-cyan-300 font-mono text-[11px]">
+                      {`${totalAssets} assets`}
+                    </text>
+                    <text x="50%" y="56%" textAnchor="middle" className="fill-slate-400 font-mono text-[10px]">
+                      {overallVerdict}
+                    </text>
+                    <Tooltip contentStyle={{ backgroundColor: '#010409', borderColor: '#00d4ff', borderRadius: '0' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="mt-2 flex flex-wrap justify-center gap-4 font-mono text-[10px]">
+                  {Object.entries(counts).map(([name, value]) => (
+                    <div key={name} className={`flex items-center gap-2 ${value > 0 ? '' : 'opacity-40'}`}>
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: COLORS[name] }} />
+                      <span className="text-slate-300">{`${name.toUpperCase()}: ${value}`}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         </div>

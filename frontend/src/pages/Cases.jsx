@@ -57,32 +57,52 @@ export default function Cases() {
           <table className="min-w-full text-left text-sm">
             <thead className="bg-slate-950/80 text-slate-400">
               <tr>
-                <th className="px-4 py-3">ID</th>
-                <th className="px-4 py-3">Title</th>
-                <th className="px-4 py-3">Severity</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Assigned To</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3">Updated</th>
-                <th className="px-4 py-3">Actions</th>
+                {['ID', 'Title', 'Severity', 'Source', 'Status', 'Assigned To', 'Created', 'Updated', 'Actions'].map((heading) => (
+                  <th key={heading} className="px-4 py-3 font-mono text-[10px] tracking-[0.18em]">{heading}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-t border-border bg-surface/70">
-                  <td className="px-4 py-3 font-mono text-slate-100">{row.id}</td>
-                  <td className="px-4 py-3 text-slate-100">{row.title}</td>
-                  <td className="px-4 py-3"><RiskBadge level={row.severity} /></td>
-                  <td className="px-4 py-3"><CaseBadge status={row.status} /></td>
-                  <td className="px-4 py-3 text-slate-300">{row.assigned_to || '-'}</td>
-                  <td className="px-4 py-3 text-slate-400">{formatDate(row.created_at)}</td>
-                  <td className="px-4 py-3 text-slate-400">{formatDate(row.updated_at)}</td>
-                  <td className="px-4 py-3"><button type="button" className="btn-secondary px-3 py-2" onClick={() => navigate(`/cases/${row.id}`)}>Open</button></td>
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const severity = String(row.severity || '').toUpperCase()
+                const border = severity === 'CRITICAL' ? 'border-l-[3px] border-red-500' : severity === 'HIGH' ? 'border-l-[3px] border-orange-500' : severity === 'MEDIUM' ? 'border-l-[3px] border-yellow-500' : ''
+                const source = row.source_type || 'manual'
+                return (
+                  <tr
+                    key={row.id}
+                    className={`border-t border-border bg-surface/70 cursor-pointer hover:bg-cyber-cyan/5 ${border}`}
+                    onClick={() => navigate(`/cases/${row.id}`)}
+                  >
+                    <td className="px-4 py-3 font-mono text-slate-400">{row.id}</td>
+                    <td className="px-4 py-3 font-mono text-slate-100">{row.title}</td>
+                    <td className="px-4 py-3"><RiskBadge level={row.severity} /></td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded border px-2 py-1 font-mono text-[10px] ${source === 'device_scan' ? 'border-emerald-500/30 text-emerald-400' : source.includes('intelligence') ? 'border-cyan-500/30 text-cyan-300' : source.startsWith('auto') ? 'border-yellow-500/30 text-yellow-300' : 'border-border text-slate-400'}`}>
+                        {String(source).toUpperCase().replace('_', ' ')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3"><CaseBadge status={row.status} /></td>
+                    <td className="px-4 py-3 text-slate-300">{row.assigned_to || '-'}</td>
+                    <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{formatDate(row.created_at)}</td>
+                    <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{formatDate(row.updated_at)}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        className="btn-secondary px-3 py-2 font-mono text-[10px]"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          navigate(`/cases/${row.id}`)
+                        }}
+                      >
+                        [ OPEN ]
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
               {!rows.length ? (
                 <tr>
-                  <td colSpan="8" className="px-4 py-10 text-center text-slate-500">No cases yet. Run AutoPilot or auto-create from alerts.</td>
+                  <td colSpan="9" className="px-4 py-10 text-center text-slate-500">No cases yet. Run AutoPilot or auto-create from alerts.</td>
                 </tr>
               ) : null}
             </tbody>
