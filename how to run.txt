@@ -2,6 +2,8 @@
 cd C:\git\risk_intelligence_system
 
 # Step 2 — activate the venv
+
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # Step 3 — if you get a permissions error on activation, run this first:
