@@ -21,8 +21,6 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 if __package__:
@@ -310,18 +308,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if (_DIST / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
-
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.get("/")
 async def root():
-    index = _DIST / "index.html"
-    if index.exists():
-        return FileResponse(str(index))
     return {"service": "risk-intelligence-system", "status": "ok", "docs": "/docs"}
 
 AUTH_ENFORCED = os.getenv("RISKINTEL_ENFORCE_AUTH", "true").lower() == "true"
@@ -1932,22 +1923,3 @@ async def aria_stats(user: UserContext = Depends(require_roles("admin", "analyst
 async def admin_metrics(user: UserContext = Depends(require_roles("admin"))):
     return automation_service.admin_metrics()
 
-
-@app.get("/analyze", include_in_schema=False)
-@app.get("/threat-intel", include_in_schema=False)
-@app.get("/website-intel", include_in_schema=False)
-@app.get("/malware", include_in_schema=False)
-@app.get("/fusion-scan", include_in_schema=False)
-async def legacy_intelligence_redirect():
-    return RedirectResponse(url="/intelligence", status_code=301)
-
-
-@app.get("/{full_path:path}")
-async def catch_all(full_path: str):
-    # Let API and docs routes continue to resolve normally.
-    if any(full_path.startswith(p) for p in ("api/", "docs", "redoc", "openapi")):
-        raise HTTPException(status_code=404)
-    index = _DIST / "index.html"
-    if index.exists():
-        return FileResponse(str(index))
-    raise HTTPException(status_code=404)

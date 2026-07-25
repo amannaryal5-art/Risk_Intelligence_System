@@ -1,9 +1,6 @@
 # Risk Intelligence System
 
-CRIE v3.0 now includes both:
-
-- A FastAPI backend at `http://127.0.0.1:8000`
-- A Vite + React command-and-control dashboard for analysts
+CRIE v3.0 provides a FastAPI backend at `http://127.0.0.1:8000`.
 
 ## Backend Launch
 
@@ -18,47 +15,10 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Open backend docs at `http://127.0.0.1:8000/docs`.
 
-## Frontend Launch
-
-```bash
-# Install
-npm install
-
-# Development
-npm run dev
-
-# Build
-npm run build
-
-# Preview
-npm run preview
-```
-
-The frontend reads:
-
-```env
-VITE_API_BASE=http://127.0.0.1:8000
-```
-
-## Frontend Stack
-
-- React 18
-- Vite
-- Tailwind CSS
-- Zustand
-- TanStack Query v5
-- React Router v6
-- Recharts
-- Framer Motion
-- Axios
-- Lucide React
-
 ## Entry Points
 
 - `app/main.py`: primary FastAPI application
 - `app.py`: thin compatibility launcher that imports `app.main:app`
-- `src/App.jsx`: SPA routing and protected app shell
-- `src/components/layout/Shell.jsx`: sidebar, topbar, command palette, live feed strip
 
 ## API Highlights
 
@@ -79,5 +39,3 @@ VITE_API_BASE=http://127.0.0.1:8000
 ## Notes
 
 - Swagger UI remains available at `/docs`.
-- The frontend does not use mock data; views are wired to live API endpoints.
-- Vite proxies `/api` to the local FastAPI server in development.
