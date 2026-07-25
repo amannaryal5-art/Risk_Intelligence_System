@@ -9,9 +9,8 @@ venv/
 # Build outputs
 dist/
 build/
+.next/
 *.js.map
-!frontend/dist/
-!frontend/dist/**
 
 # Environment variables
 .env 
