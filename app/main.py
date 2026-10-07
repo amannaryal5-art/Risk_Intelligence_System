@@ -17,9 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .binary_analyzer import BinaryAnalyzer
 from .cyber_fusion import CyberFusionEngine
+from .defense_rules import DefenseRuleGenerator
+from .dns_auditor import DnsAuditor
 from .risk_engine import RiskEngine
 from .scamcheck import ScamCheckCacheStore, ScamCheckService
+from .threat_graph import ThreatGraphBuilder
 from .threat_intel import ThreatIntelEngine
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,6 +56,8 @@ engine = RiskEngine()
 intel = ThreatIntelEngine()
 fusion = CyberFusionEngine(engine)
 scamcheck = ScamCheckService(intel, engine, ScamCheckCacheStore(DATA_DIR / "riskintel_cache.db"))
+binary_analyzer = BinaryAnalyzer()
+dns_auditor = DnsAuditor()
 API_KEY = os.getenv("RISKINTEL_API_KEY") or os.getenv("RISKINTEL_DEFAULT_API_KEY", "")
 LIVE_FEEDS = os.getenv("RISKINTEL_USE_LIVE_FEEDS", "true").lower() == "true"
 
@@ -108,6 +114,24 @@ class FusionRequest(BaseModel):
 class FileRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=300)
     content_base64: str = Field(min_length=1)
+
+
+class DomainAuditRequest(BaseModel):
+    domain: str = Field(min_length=1, max_length=255)
+
+
+class SoarRulesRequest(BaseModel):
+    ips: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    hashes: list[str] = Field(default_factory=list)
+    title: str = Field(default="CRIE Autonomous Defense Playbook")
+
+
+class ThreatGraphRequest(BaseModel):
+    target: str = Field(min_length=1)
+    kind: str = Field(default="domain")
+    scan_data: Optional[dict[str, Any]] = None
 
 
 def level(score: int) -> str:
@@ -197,3 +221,53 @@ async def analyze_file(payload: FileRequest) -> dict[str, Any]:
             score += points; flags.append(description)
     sha256 = hashlib.sha256(blob).hexdigest()
     return {"filename": payload.filename, "size_bytes": len(blob), "sha256": sha256, "risk_score": min(score, 100), "risk_level": level(min(score, 100)), "suspicious_signals": flags, "ioc_intelligence": await intel.scan_async(hashes=[sha256], live_feeds=LIVE_FEEDS)}
+
+
+@app.post("/api/v1/cyber-fusion", dependencies=[Depends(require_api_key)])
+async def cyber_fusion_endpoint(payload: FusionRequest) -> dict[str, Any]:
+    result = await fusion.fusion_scan_async(text=payload.text, website_url=payload.website_url, max_pages=payload.max_pages, max_depth=payload.max_depth)
+    if payload.text:
+        result["ioc_intelligence"] = await intel.scan_async(text=payload.text, live_feeds=LIVE_FEEDS)
+    return result
+
+
+@app.post("/api/v1/malware/deep-analysis", dependencies=[Depends(require_api_key)])
+async def malware_deep_analysis(payload: FileRequest) -> dict[str, Any]:
+    try:
+        blob = base64.b64decode(payload.content_base64, validate=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="content_base64 must be valid base64") from exc
+    analysis = await asyncio.get_running_loop().run_in_executor(
+        engine._executor,
+        lambda: binary_analyzer.analyze_file(payload.filename, blob),
+    )
+    if LIVE_FEEDS and analysis.get("sha256"):
+        analysis["ioc_intelligence"] = await intel.scan_async(hashes=[analysis["sha256"]], live_feeds=True)
+    return analysis
+
+
+@app.post("/api/v1/audit/domain-dns", dependencies=[Depends(require_api_key)])
+async def audit_domain_dns(payload: DomainAuditRequest) -> dict[str, Any]:
+    return await asyncio.get_running_loop().run_in_executor(
+        engine._executor,
+        lambda: dns_auditor.audit_domain(payload.domain),
+    )
+
+
+@app.post("/api/v1/soar/generate-rules", dependencies=[Depends(require_api_key)])
+async def generate_soar_rules(payload: SoarRulesRequest) -> dict[str, Any]:
+    return DefenseRuleGenerator.generate_playbook(
+        ips=payload.ips,
+        domains=payload.domains,
+        urls=payload.urls,
+        hashes=payload.hashes,
+        title=payload.title,
+    )
+
+
+@app.post("/api/v1/threat-graph", dependencies=[Depends(require_api_key)])
+async def build_threat_graph(payload: ThreatGraphRequest) -> dict[str, Any]:
+    return await asyncio.get_running_loop().run_in_executor(
+        engine._executor,
+        lambda: ThreatGraphBuilder.build_graph(payload.target, payload.kind, payload.scan_data),
+    )

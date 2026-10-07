@@ -70,16 +70,30 @@ class RiskEngine:
         """WHOIS is deliberately not queried: it is unreliable and often rate limited."""
         return {"hostname": hostname, "available": False, "reason": "WHOIS lookup is not part of the local scoring pipeline"}
 
+    @staticmethod
+    def _is_safe_host(hostname: str) -> bool:
+        if not hostname or hostname in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        try:
+            ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(ip)
+            return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved)
+        except Exception:
+            return False
+
     def trace_website(self, url: str, max_pages: int = 40, max_depth: int = 2, include_external: bool = False, exhaustive: bool = True) -> dict[str, Any]:
         normalized = url if "://" in url else f"https://{url}"
         parsed = urlsplit(normalized)
-        if not parsed.hostname:
-            raise ValueError("Provide a valid URL or domain")
+        if not parsed.hostname or not self._is_safe_host(parsed.hostname):
+            raise ValueError("Provide a valid public URL or domain")
         pages: list[dict[str, Any]] = []
         seen = {normalized}
         pending = [(normalized, 0)]
         while pending and len(pages) < max_pages:
             current, depth = pending.pop(0)
+            cur_host = urlsplit(current).hostname
+            if not cur_host or not self._is_safe_host(cur_host):
+                continue
             try:
                 request = Request(current, headers={"User-Agent": "RiskIntel/1.0"})
                 with urlopen(request, timeout=6) as response:
