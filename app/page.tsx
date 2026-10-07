@@ -149,10 +149,13 @@ export default function Console() {
 
   async function runCyberFusion(target: string) {
     setBusy(true);
+    setActiveTarget(target);
     const toastId = toast.loading("Running a full 360° risk check — this takes a moment…");
     try {
-      const isUrl = target.startsWith("http://") || target.startsWith("https://") || target.includes(".");
-      const payload = isUrl ? { website_url: target } : { text: target };
+      const clean = target.trim();
+      const hasSpaces = /\s/.test(clean);
+      const isCleanDomain = !hasSpaces && /^(https?:\/\/|[a-zA-Z0-9-]+\.[a-zA-Z]{2,})/.test(clean);
+      const payload = isCleanDomain ? { website_url: clean, text: clean } : { text: clean };
       const data = await api<any>("/api/v1/cyber-fusion", { method: "POST", body: JSON.stringify(payload) });
       toast.success("Full risk overview ready", { id: toastId });
       setFusionData(data);

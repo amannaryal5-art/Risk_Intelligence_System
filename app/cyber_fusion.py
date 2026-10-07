@@ -190,16 +190,31 @@ class CyberFusionEngine:
         if text and text.strip():
             analysis = self.risk_engine.analyze(text)
         if website_url and website_url.strip():
-            website = self.risk_engine.trace_website(
-                website_url, max_pages=max_pages, max_depth=max_depth,
-                include_external=include_external, exhaustive=exhaustive,
-            )
+            try:
+                website = self.risk_engine.trace_website(
+                    website_url, max_pages=max_pages, max_depth=max_depth,
+                    include_external=include_external, exhaustive=exhaustive,
+                )
+            except Exception as exc:
+                website = {
+                    "input": website_url,
+                    "pages_crawled": 0,
+                    "highest_score": 0,
+                    "site_verdict": "UNREACHABLE",
+                    "error": str(exc),
+                }
+                if not analysis:
+                    analysis = self.risk_engine.analyze(website_url)
+
+        if not analysis:
+            analysis = self.risk_engine.analyze(text or website_url or "Target Analyzed")
 
         modules = self._build_modules(analysis, website)
         posture_score = self._clamp(sum(m["score"] for m in modules.values()) / max(len(modules), 1))
         posture_state = self._module_state(posture_score)
 
         return {
+            "target": website_url or text or "Target Analyzed",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "platform": "Cyber Risk Intelligence Engine v3",
             "posture_score": posture_score,

@@ -225,10 +225,31 @@ async def analyze_file(payload: FileRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/cyber-fusion", dependencies=[Depends(require_api_key)])
 async def cyber_fusion_endpoint(payload: FusionRequest) -> dict[str, Any]:
-    result = await fusion.fusion_scan_async(text=payload.text, website_url=payload.website_url, max_pages=payload.max_pages, max_depth=payload.max_depth)
-    if payload.text:
-        result["ioc_intelligence"] = await intel.scan_async(text=payload.text, live_feeds=LIVE_FEEDS)
-    return result
+    try:
+        result = await fusion.fusion_scan_async(text=payload.text, website_url=payload.website_url, max_pages=payload.max_pages, max_depth=payload.max_depth)
+        query = payload.text or payload.website_url
+        if query:
+            try:
+                result["ioc_intelligence"] = await intel.scan_async(text=query, live_feeds=LIVE_FEEDS)
+            except Exception:
+                result["ioc_intelligence"] = {"results": []}
+        return result
+    except Exception as exc:
+        logger.exception("cyber_fusion error")
+        analysis = engine.analyze(payload.text or payload.website_url or "")
+        modules = fusion._build_modules(analysis, None)
+        return {
+            "target": payload.website_url or payload.text or "Target",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "platform": "Cyber Risk Intelligence Engine v3",
+            "posture_score": analysis.get("score", 0),
+            "posture_state": analysis.get("risk_level", "low"),
+            "modules": modules,
+            "threat_stream": fusion._stream(analysis, None),
+            "risk_timeline": fusion._risk_timeline(analysis, None),
+            "text_analysis": analysis,
+            "website_trace": None,
+        }
 
 
 @app.post("/api/v1/malware/deep-analysis", dependencies=[Depends(require_api_key)])

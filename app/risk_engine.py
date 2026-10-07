@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
