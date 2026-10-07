@@ -1,7 +1,7 @@
 {
   "name": "crie-console",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "lint": "next lint" },
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "lint": "next lint", "run:all": "python start.py" },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
     "next": "^15.4.5",

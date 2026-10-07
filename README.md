@@ -2,7 +2,23 @@
 
 CRIE checks suspicious links, IPs, hashes, messages, and files with local scoring and live threat intelligence.
 
-## Run the API
+## Quick Start (One Command)
+
+To run everything (backend + frontend) with a single command:
+
+~~~powershell
+.\run.bat
+~~~
+
+*Or double-click `run.bat` in File Explorer.* (PowerShell: `.\run.ps1` or `python start.py`).
+
+This automatically initializes the environment, sets up dependencies, boots both servers, and opens the console in your browser at `http://localhost:3000`.
+
+---
+
+## Manual Setup (Optional)
+
+### Run the API
 
 ~~~powershell
 python -m venv .venv
@@ -14,7 +30,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 API documentation is at http://127.0.0.1:8000/docs.
 
-## Run the console
+### Run the console
 
 In a second terminal:
 

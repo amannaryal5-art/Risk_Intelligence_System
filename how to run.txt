@@ -1,24 +1,43 @@
-# Step 1 — go to project root (not app subfolder)
-cd C:\git\risk_intelligence_system
+========================================================================
+EASIEST WAY (1-CLICK / 1-COMMAND)
+========================================================================
 
-# Step 2 — activate the venv
+Just run ONE command from this directory:
 
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+    .\run.bat
 
-# Step 3 — if you get a permissions error on activation, run this first:
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+(Or literally double-click "run.bat" in File Explorer!)
 
-# Step 4 — install dependencies
-pip install -r requirements.txt
+Alternatively in PowerShell:
+    .\run.ps1
+or:
+    python start.py
 
-# Step 5 — start the API server
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+This automatically:
+  1. Creates .env if missing
+  2. Sets up the Python virtual environment (.venv)
+  3. Installs Python dependencies (fastapi, uvicorn, etc.)
+  4. Installs frontend dependencies (npm install)
+  5. Starts the FastAPI backend (http://127.0.0.1:8000)
+  6. Starts the Next.js frontend console (http://localhost:3000)
+  7. Opens your browser automatically!
 
-# Step 6 — open API docs
-# http://127.0.0.1:8000/docs
+Press Ctrl+C at any time in the console to stop both servers cleanly.
 
-# Step 7 â€” in a second terminal, start the frontend
-npm install
-npm run dev
-# http://127.0.0.1:3000
+========================================================================
+MANUAL WAY (OPTIONAL / ADVANCED)
+========================================================================
+
+Terminal 1 (Backend):
+    python -m venv .venv
+    .\.venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+    python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+Terminal 2 (Frontend):
+    npm install
+    npm run dev
+
+Open:
+    Frontend: http://localhost:3000
+    Backend Docs: http://127.0.0.1:8000/docs
